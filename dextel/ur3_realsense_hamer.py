@@ -666,10 +666,15 @@ class HybridHandPoseEstimator:
         
         # Save for debug visualization
         debug_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+        
+        # EXPERIMENTAL: Try BGR for HaMeR
+        # Standard ViT/PyTorch models usually want RGB, but if mean pose persists,
+        # checking BGR is a valid sanity check (sometimes libs assume BGR)
+        hamer_input = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) 
 
         if SYNC_MODE:
             # Synchronous Inference (Main Thread)
-            result_data = self.hamer_engine.infer(crop)
+            result_data = self.hamer_engine.infer(hamer_input)
             if result_data is not None:
                 joints_3d = result_data["joints"]
                 vertices = result_data["vertices"]
@@ -683,7 +688,7 @@ class HybridHandPoseEstimator:
         else:
             # Async Mode
             if self.hamer_submit_counter % self.hamer_interval == 0:
-                self.async_queue.submit(crop, frame_id)
+                self.async_queue.submit(hamer_input, frame_id)
                 self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval
 
             self.hamer_submit_counter += 1
@@ -726,6 +731,16 @@ class HybridHandPoseEstimator:
             return None
 
         self.stats["fusion_ms"] = (time.time() - t_fusion_start) * 1000.0
+
+        # DEBUG: Check variance to detect Mean Pose
+        if self.prev_pose is not None and self.prev_pose.joints_3d is not None and pose.joints_3d is not None:
+            # Compare raw joints (before temporal check/smoothing)
+            diff = np.linalg.norm(pose.joints_3d - self.prev_pose.joints_3d)
+            if diff < 1e-6:
+                print(f"[DEBUG] HaMeR Output STATIC (Diff: {diff:.6f}) -> MEAN POSE DETECTED?")
+            else:
+                pass 
+                # print(f"[DEBUG] HaMeR Output CHANGING (Diff: {diff:.4f})")
 
         self.prev_pose = pose
         return pose
