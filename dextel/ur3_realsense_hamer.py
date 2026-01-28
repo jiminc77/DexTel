@@ -214,34 +214,46 @@ class MediaPipeBBoxDetector:
         landmarks = results.multi_hand_landmarks[0]
         confidence = results.multi_handedness[0].classification[0].score
 
-        x_coords = [lm.x * w for lm in landmarks.landmark]
-        y_coords = [lm.y * h for lm in landmarks.landmark]
+        # [NORMALIZATION] Use palm-based stable box logic from ur3_hamer.py
+        wrist = landmarks.landmark[0]
+        middle_mcp = landmarks.landmark[9]
 
-        x_min, x_max = min(x_coords), max(x_coords)
-        y_min, y_max = min(y_coords), max(y_coords)
-
-        box_w = x_max - x_min
-        box_h = y_max - y_min
-        box_size = max(box_w, box_h)
-        padding = int(box_size * 0.5)
-
-        cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
-        half_s = (box_size + padding) / 2
-
-        x = max(0, int(cx - half_s))
-        y = max(0, int(cy - half_s))
-        x2 = min(w, int(cx + half_s))
-        y2 = min(h, int(cy + half_s))
-
-        bbox = [x, y, x2 - x, y2 - y]
+        x0, y0 = wrist.x * w, wrist.y * h
+        x9, y9 = middle_mcp.x * w, middle_mcp.y * h
+        
+        raw_cx, raw_cy = (x0 + x9) / 2, (y0 + y9) / 2
+        palm_len = np.linalg.norm(np.array([x0, y0]) - np.array([x9, y9]))
+        
+        BOX_SCALE = 4.5
+        raw_size = palm_len * BOX_SCALE
 
         if self.prev_bbox is not None:
-            bbox = [
-                int(self.bbox_alpha * bbox[i] + (1 - self.bbox_alpha) * self.prev_bbox[i])
-                for i in range(4)
-            ]
+            prev_cx, prev_cy, prev_size = self.prev_bbox
+            S_FACTOR = 0.8
+            curr_cx = prev_cx * S_FACTOR + raw_cx * (1 - S_FACTOR)
+            curr_cy = prev_cy * S_FACTOR + raw_cy * (1 - S_FACTOR)
+            curr_size = prev_size * S_FACTOR + raw_size * (1 - S_FACTOR)
+        else:
+            curr_cx, curr_cy, curr_size = raw_cx, raw_cy, raw_size
 
-        self.prev_bbox = bbox
+        # Store as [cx, cy, size] for smoothing next frame
+        self.prev_bbox = [curr_cx, curr_cy, curr_size]
+
+        # Convert to [x, y, w, h] for compatibility
+        half_s = curr_size / 2
+        x = int(curr_cx - half_s)
+        y = int(curr_cy - half_s)
+        size = int(curr_size)
+
+        # Clamp to image bounds
+        x = max(0, x)
+        y = max(0, y)
+        w_box = min(w - x, size)
+        h_box = min(h - y, size)
+
+        # Make square as much as possible, or just use w, h
+        # HaMeR expects square-ish crops, so we try to provide square
+        bbox = [x, y, w_box, h_box]
 
         return bbox, confidence, landmarks
 
@@ -576,6 +588,10 @@ class HybridHandPoseEstimator:
         self.hamer_submit_counter = 0
         self.hamer_interval = 6
 
+        # OneEuroFilters for smoothing
+        self.filter_joints = OneEuroFilter(min_cutoff=0.05, beta=2.0)
+        self.filter_vertices = OneEuroFilter(min_cutoff=0.05, beta=2.0)
+
         self.stats = {
             "bbox_ms": 0.0,
             "hamer_ms": 0.0,
@@ -666,10 +682,15 @@ class HybridHandPoseEstimator:
         
         # Save for debug visualization
         debug_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+
+        # [CRITICAL] Chirality Fix
+        # HaMeR often works better on the "mirrored" version if the hand is right/left ambiguous or dataset bias.
+        # We flip the input, then we must flip the output back.
+        crop_flipped = cv2.flip(crop, 1)
         
         if SYNC_MODE:
             # Synchronous Inference (Main Thread)
-            result_data = self.hamer_engine.infer(crop)
+            result_data = self.hamer_engine.infer(crop_flipped)
             if result_data is not None:
                 joints_3d = result_data["joints"]
                 vertices = result_data["vertices"]
@@ -683,7 +704,7 @@ class HybridHandPoseEstimator:
         else:
             # Async Mode
             if self.hamer_submit_counter % self.hamer_interval == 0:
-                self.async_queue.submit(crop, frame_id)
+                self.async_queue.submit(crop_flipped, frame_id)
                 self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval
 
             self.hamer_submit_counter += 1
@@ -705,6 +726,19 @@ class HybridHandPoseEstimator:
         t_fusion_start = time.time()
 
         if joints_3d is not None:
+            # [CRITICAL] Un-Flip 3D X-coordinates
+            # Since we flipped the input image, the predicted 3D structure is also flipped.
+            # We negate the X component to restore it (assuming canonical centering).
+            joints_3d = joints_3d.copy()
+            vertices = vertices.copy()
+            joints_3d[:, 0] *= -1
+            vertices[:, 0] *= -1
+
+            # [SMOOTHING] Apply OneEuroFilter
+            t_curr = time.time()
+            joints_3d = self.filter_joints(t_curr, joints_3d)
+            vertices = self.filter_vertices(t_curr, vertices)
+
             scaled_joints, scaled_vertices = self._fuse_hamer_with_depth(joints_3d, vertices, wrist_depth_rs)
             wrist, v_approach, v_normal = self.frame_estimator.estimate_with_temporal_check(scaled_joints)
 
@@ -726,16 +760,6 @@ class HybridHandPoseEstimator:
             return None
 
         self.stats["fusion_ms"] = (time.time() - t_fusion_start) * 1000.0
-
-        # DEBUG: Check variance to detect Mean Pose
-        if self.prev_pose is not None and self.prev_pose.joints_3d is not None and pose.joints_3d is not None:
-            # Compare raw joints (before temporal check/smoothing)
-            diff = np.linalg.norm(pose.joints_3d - self.prev_pose.joints_3d)
-            if diff < 1e-6:
-                print(f"[DEBUG] HaMeR Output STATIC (Diff: {diff:.6f}) -> MEAN POSE DETECTED?")
-            else:
-                pass 
-                # print(f"[DEBUG] HaMeR Output CHANGING (Diff: {diff:.4f})")
 
         self.prev_pose = pose
         return pose
@@ -786,18 +810,12 @@ def draw_hand_mesh(image, vertices, faces, intrinsics):
 
     points = np.stack([v_x, v_y], axis=1).astype(np.int32)
     
-    # Draw wireframe (subset of edges for speed, or all faces)
-    # Drawing all faces might be dense. Let's draw points for now to ensure speed
-    # OPTION: Draw mesh edges - STRIDED for performance
-    
     # Pre-allocate valid points
     pts_2d = points[valid_mask]
     
-    # Draw vertices as dots (faster than wireframe)
+    # Draw vertices as dots
     for i in range(0, len(pts_2d), 2): # Draw every 2nd vertex
          cv2.circle(image, (pts_2d[i, 0], pts_2d[i, 1]), 1, (200, 200, 200), -1)
-    
-    # Draw SOME edges for wireframe look (every 10th face)
     for i in range(0, len(faces), 10):
         face = faces[i]
         pts = points[face]
