@@ -286,8 +286,9 @@ class HaMeRInferenceEngine:
             else:
                 print("[INFO] HaMeR model loaded with FP32 precision.")
 
-            self.mean = torch.tensor(DEFAULT_MEAN, device=self.device).view(3, 1, 1).float()
-            self.std = torch.tensor(DEFAULT_STD, device=self.device).view(3, 1, 1).float()
+            # [NORMALIZATION] Match ur3_hamer.py exactly
+            self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(3, 1, 1).float()
+            self.std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(3, 1, 1).float()
 
             if self.use_fp16:
                 self.mean = self.mean.half()
@@ -300,22 +301,21 @@ class HaMeRInferenceEngine:
             raise RuntimeError(f"Failed to load HaMeR model: {e}")
 
     def _preprocess(self, image_crop: np.ndarray) -> torch.Tensor:
+        # [NORMALIZATION] Logic from ur3_hamer.py
+        # 1. Resize
         img_resized = cv2.resize(image_crop, (256, 256), interpolation=cv2.INTER_LINEAR)
-        # Convert to tensor and normalize to [0, 1]
+        
+        # 2. Scaling (0-1)
         img_tensor = torch.from_numpy(img_resized).float() / 255.0
-        img_tensor = img_tensor.to(self.device)
-
-        # HWC -> CHW
-        img_tensor = img_tensor.permute(2, 0, 1)
-
-        # Normalize with ImageNet statistics
-        img_tensor = (img_tensor - self.mean) / self.std
-
-        # Add batch dimension
-        img_tensor = img_tensor.unsqueeze(0)
-
+        
+        # 3. Permute & Unsqueeze (HWC -> BCHW)
+        img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0).to(self.device)
+        
+        # 4. Standardization
         if self.use_fp16:
             img_tensor = img_tensor.half()
+            
+        img_tensor = (img_tensor - self.mean) / self.std
 
         return img_tensor
 
