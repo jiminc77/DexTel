@@ -980,13 +980,13 @@ def main():
 
         # 5. Initialize Filters (TUNED FOR 3090/4090/5090 Responsiveness)
         print("[5/5] Initializing Filters and Pinch Detector...")
-        t0 = time.time()
+        
         # Beta increased for faster tracking
-        filter_pos = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.1, beta=0.5, d_cutoff=1.0)
+        filter_pos = OneEuroFilter(min_cutoff=0.1, beta=0.5, d_cutoff=1.0)
         # Rotation needs to be VERY fast to feel responsive
-        filter_app = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.1, beta=2.0, d_cutoff=1.0)
-        filter_norm = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.1, beta=2.0, d_cutoff=1.0)
-        filter_pinch = OneEuroFilter(t0, 0.0, min_cutoff=2.0, beta=1.0, d_cutoff=1.0)
+        filter_app = OneEuroFilter(min_cutoff=0.1, beta=2.0, d_cutoff=1.0)
+        filter_norm = OneEuroFilter(min_cutoff=0.1, beta=2.0, d_cutoff=1.0)
+        filter_pinch = OneEuroFilter(min_cutoff=2.0, beta=1.0, d_cutoff=1.0)
 
         pinch_detector = PinchDetector()
 
