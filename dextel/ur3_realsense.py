@@ -214,12 +214,19 @@ class DeXHandDetector:
 
     @staticmethod
     def draw_skeleton(image, landmarks_2d):
-        mp.solutions.drawing_utils.draw_landmarks(
+        mp_drawing = mp.solutions.drawing_utils
+        mp_hands = mp.solutions.hands
+        
+        # Custom style for smaller dots
+        landmark_style = mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=-1, circle_radius=2)
+        connection_style = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1)
+
+        mp_drawing.draw_landmarks(
             image,
             landmarks_2d,
-            mp.solutions.hands.HAND_CONNECTIONS,
-            mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
-            mp.solutions.drawing_styles.get_default_hand_connections_style(),
+            mp_hands.HAND_CONNECTIONS,
+            landmark_style,
+            connection_style,
         )
 
 def main():
@@ -229,6 +236,7 @@ def main():
         
         detector = DeXHandDetector()
         filter_3d = None
+        filter_pinch = None
         
         print("\n[INFO] Starting Realsense Hand Tracking")
         print("[INFO] Press 'q' to exit.")
@@ -258,6 +266,8 @@ def main():
                     current_time = time.time()
                     if filter_3d is None:
                         filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=0.5, beta=0.05, d_cutoff=1.0)
+                    if filter_pinch is None:
+                        filter_pinch = OneEuroFilter(current_time, 0, min_cutoff=1.0, beta=0.01, d_cutoff=1.0)
                     
                     points_3d_filtered = filter_3d(current_time, points_3d)
                     
@@ -268,7 +278,10 @@ def main():
                         
                         thumb_tip = points_3d_filtered[4]
                         index_tip = points_3d_filtered[8]
-                        pinch_dist = np.linalg.norm(thumb_tip - index_tip)
+                        
+                        # Apply filter to scalar pinch distance
+                        raw_pinch = np.linalg.norm(thumb_tip - index_tip)
+                        pinch_dist = float(filter_pinch(current_time, raw_pinch))
 
                         h, w = color_image.shape[:2]
                         wrist_px = (int(landmarks_2d.landmark[0].x * w), int(landmarks_2d.landmark[0].y * h))
