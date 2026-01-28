@@ -34,13 +34,13 @@ class HandPose:
 
 
 class OneEuroFilter:
-    def __init__(self, t0, x0, dx0=0.0, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
+    def __init__(self, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
         self.min_cutoff = float(min_cutoff)
         self.beta = float(beta)
         self.d_cutoff = float(d_cutoff)
-        self.x_prev = np.array(x0, dtype=np.float64)
-        self.dx_prev = np.array(dx0, dtype=np.float64) if isinstance(dx0, (list, tuple, np.ndarray)) else np.full_like(self.x_prev, dx0)
-        self.t_prev = float(t0)
+        self.x_prev = None
+        self.dx_prev = None
+        self.t_prev = None
 
     def smoothing_factor(self, t_e, cutoff):
         r = 2 * math.pi * cutoff * t_e
@@ -50,11 +50,19 @@ class OneEuroFilter:
         return a * x + (1 - a) * x_prev
 
     def __call__(self, t, x):
+        t = float(t)
+        x = np.array(x, dtype=np.float64)
+
+        if self.t_prev is None:
+            self.t_prev = t
+            self.x_prev = x
+            self.dx_prev = np.zeros_like(x)
+            return x
+
         t_e = t - self.t_prev
         if t_e <= 0:
             return self.x_prev
 
-        x = np.array(x, dtype=np.float64)
         a_d = self.smoothing_factor(t_e, self.d_cutoff)
         dx = (x - self.x_prev) / t_e
         dx_hat = self.exponential_smoothing(a_d, dx, self.dx_prev)
