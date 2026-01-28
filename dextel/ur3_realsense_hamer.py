@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore")
 
 # Constants
 HAMER_CONFIDENCE_THRESH = 0.5
-PINCH_CLOSE_THRESH = 0.07  # meters (7cm)
+PINCH_CLOSE_THRESH = 0.08  # meters (7cm)
 PINCH_OPEN_THRESH = 0.12   # meters (12cm)
 WRIST_FRAME_SMOOTH_ALPHA = 0.6 # Lower = smoother, Higher = faster
 
