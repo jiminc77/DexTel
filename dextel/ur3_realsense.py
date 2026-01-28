@@ -191,7 +191,6 @@ class DeXHandDetector:
         index_mcp = points_3d[5]
         pinky_mcp = points_3d[17]
         
-        # Check if critical keypoints are valid
         if np.isnan(wrist).any() or np.isnan(index_mcp).any() or np.isnan(pinky_mcp).any():
             return None, None, None
         
@@ -242,6 +241,10 @@ def main():
                 break 
                 
             rgb_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+            
+            rgb_image = cv2.flip(rgb_image, 1)
+            color_image = cv2.flip(color_image, 1)
+
             landmarks_2d, label = detector.detect_2d(rgb_image)
 
             if landmarks_2d:
@@ -254,7 +257,7 @@ def main():
                 if wrist is not None:
                     current_time = time.time()
                     if filter_3d is None:
-                        filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=1.0, beta=10.0, d_cutoff=1.0)
+                        filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=0.5, beta=0.05, d_cutoff=1.0)
                     
                     points_3d_filtered = filter_3d(current_time, points_3d)
                     
@@ -285,8 +288,13 @@ def main():
                             px, py = int(pixel_normal[0]), int(pixel_normal[1])
                             if -1000 < px < 3000 and -1000 < py < 3000:
                                 cv2.arrowedLine(color_image, wrist_px, (px, py), (0, 255, 0), 3)
+                        if np.isnan(pinch_dist):
+                            pinch_str = "N/A"
+                        else:
+                            pinch_str = f"{pinch_dist*1000:.1f}mm"
+                        
                         cv2.putText(color_image, f"Wrist Z: {wrist[2]:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                        cv2.putText(color_image, f"Pinch: {pinch_dist*1000:.1f}mm", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.putText(color_image, f"Pinch: {pinch_str}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     else:
                          cv2.putText(color_image, "Filtering Unstable", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
                 else:
