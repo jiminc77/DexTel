@@ -283,10 +283,10 @@ def main():
                         pinch_dist = float(filter_pinch(current_time, raw_pinch))
 
                         if gripper_state == "OPEN":
-                            if pinch_dist < 0.05:
+                            if pinch_dist < 0.07:
                                 gripper_state = "CLOSE"
                         else:
-                            if pinch_dist > 0.1:
+                            if pinch_dist > 0.12:
                                 gripper_state = "OPEN"
 
                         h, w = color_image.shape[:2]
