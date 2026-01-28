@@ -187,7 +187,7 @@ class MediaPipeBBoxDetector:
             max_num_hands=1,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
-            model_complexity=0
+            model_complexity=1  # Medium complexity for better accuracy
         )
 
         self.prev_bbox = None
@@ -741,10 +741,23 @@ def draw_hand_mesh(image, vertices, faces, intrinsics):
 
     points = np.stack([v_x, v_y], axis=1).astype(np.int32)
     
-    for face in faces:
+    # Draw wireframe (subset of edges for speed, or all faces)
+    # Drawing all faces might be dense. Let's draw points for now to ensure speed
+    # OPTION: Draw mesh edges - STRIDED for performance
+    
+    # Pre-allocate valid points
+    pts_2d = points[valid_mask]
+    
+    # Draw vertices as dots (faster than wireframe)
+    for i in range(0, len(pts_2d), 2): # Draw every 2nd vertex
+         cv2.circle(image, (pts_2d[i, 0], pts_2d[i, 1]), 1, (200, 200, 200), -1)
+    
+    # Draw SOME edges for wireframe look (every 10th face)
+    for i in range(0, len(faces), 10):
+        face = faces[i]
         pts = points[face]
+        # Check bounds
         if np.any(pts < 0) or np.any(pts[:, 0] >= w) or np.any(pts[:, 1] >= h): continue
-        
         cv2.polylines(image, [pts], True, (255, 255, 255), 1, cv2.LINE_AA)
 
 
@@ -781,12 +794,17 @@ def draw_ui_overlay(
     
     color_grip = (0, 255, 0) if gripper_state == "OPEN" else (0, 0, 255)
     cv2.putText(image, "Gripper:", (x_start + 10, y_start + 90), font, 0.6, color_text, 1)
-    cv2.putText(image, gripper_state, (x_start + 90, y_start + 90), font, 0.7, color_grip, 2)
-
+    cv2.putText(image, gripper_state, (x_start + 90, y_start + 90), font, 0.7, color_grip, 2)    # Timings
     cv2.putText(image, f"BBox: {stats['bbox_ms']:.1f}  HaMeR: {stats['hamer_ms']:.1f}", 
                 (x_start + 10, y_start + 120), font, 0.45, (200, 200, 200), 1)
-    cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}  Age: {stats['cache_age_ms']:.0f}ms", 
-                (x_start + 10, y_start + 140), font, 0.45, (200, 200, 200), 1)
+                
+    # HaMeR Status
+    age = stats['cache_age_ms']
+    color_status = (0, 255, 0) if age < 500 else (0, 0, 255)
+    status_text = "OK" if age < 500 else "LAG"
+    
+    cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}  Age: {age:.0f}ms [{status_text}]", 
+                (x_start + 10, y_start + 140), font, 0.45, color_status, 1)
 
 
 def main():
@@ -822,11 +840,14 @@ def main():
             async_queue=async_queue
         )
 
+        # 5. Initialize Filters (TUNED FOR 3090/4090/5090 Responsiveness)
         print("[5/5] Initializing Filters and Pinch Detector...")
         t0 = time.time()
-        filter_pos = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.5, beta=0.05, d_cutoff=1.0)
-        filter_app = OneEuroFilter(t0, np.zeros(3), min_cutoff=1.0, beta=0.1, d_cutoff=1.0)
-        filter_norm = OneEuroFilter(t0, np.zeros(3), min_cutoff=1.0, beta=0.1, d_cutoff=1.0)
+        # Beta increased for faster tracking
+        filter_pos = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.1, beta=0.5, d_cutoff=1.0)
+        # Rotation needs to be VERY fast to feel responsive
+        filter_app = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.1, beta=2.0, d_cutoff=1.0)
+        filter_norm = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.1, beta=2.0, d_cutoff=1.0)
         filter_pinch = OneEuroFilter(t0, 0.0, min_cutoff=2.0, beta=1.0, d_cutoff=1.0)
 
         pinch_detector = PinchDetector()
@@ -857,13 +878,16 @@ def main():
             if pose is not None:
                 t_now = time.time()
 
+                # Apply filters
                 wrist = filter_pos(t_now, pose.position)
                 v_app = filter_app(t_now, pose.approach)
                 v_norm = filter_norm(t_now, pose.normal)
 
+                # Detect pinch
                 gripper_state = pinch_detector.detect(pose.joints_3d)
-                # Draw
-                # draw_hand_mesh(color_img, pose.vertices, pose.faces, rs_cam.intrinsics)  <-- DISABLED
+
+                # Visualize (Mesh enabled for debugging)
+                draw_hand_mesh(color_img, pose.vertices, pose.faces, rs_cam.intrinsics)
                 draw_wrist_frame(color_img, wrist, v_app, v_norm, rs_cam.intrinsics)
 
                 stats = estimator.get_stats()
