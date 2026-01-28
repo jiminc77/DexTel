@@ -11,6 +11,7 @@ from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
 HAMER_AVAILABLE = True
+SYNC_MODE = True  # DEBUG: Run synchronously to verify HaMeR output
 print("[INFO] Loading HaMeR dependencies...")
 import torch
 from hamer.models import load_hamer, DEFAULT_CHECKPOINT
@@ -29,6 +30,7 @@ class HandPose:
     bbox: Optional[list] = None
     timestamp: float = 0.0
     gripper_state: str = "OPEN"
+    debug_crop: Optional[np.ndarray] = None  # For visual debugging
 
 
 class OneEuroFilter:
@@ -637,9 +639,11 @@ class HybridHandPoseEstimator:
         if wrist_depth_rs is None or wrist_depth_rs <= 0:
             return None
 
+        # 3. HaMeR inference
         joints_3d = None
         vertices = None
         faces = None
+        debug_crop = None
         t_hamer_start = time.time()
 
         if self.prev_pose is not None:
@@ -656,25 +660,45 @@ class HybridHandPoseEstimator:
             elif motion > 20: self.hamer_interval = 3
             else: self.hamer_interval = 4
 
-        if self.hamer_submit_counter % self.hamer_interval == 0:
-            x, y, w_box, h_box = bbox
-            crop = image_rgb[y:y+h_box, x:x+w_box].copy()
-            self.async_queue.submit(crop, frame_id)
-            self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval
+        # Prepare Crop
+        x, y, w_box, h_box = bbox
+        crop = image_rgb[y:y+h_box, x:x+w_box].copy()
+        
+        # Save for debug visualization
+        debug_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
 
-        self.hamer_submit_counter += 1
+        if SYNC_MODE:
+            # Synchronous Inference (Main Thread)
+            result_data = self.hamer_engine.infer(crop)
+            if result_data is not None:
+                joints_3d = result_data["joints"]
+                vertices = result_data["vertices"]
+                faces = result_data["faces"]
+                self.stats["cache_age_ms"] = 0.0 # Fresh
+                self.stats["error"] = None
+                self.stats["hamer_submit_rate"] = 0.0 # N/A in sync
+            else:
+                 self.stats["error"] = "Sync Infer Failed"
+        
+        else:
+            # Async Mode
+            if self.hamer_submit_counter % self.hamer_interval == 0:
+                self.async_queue.submit(crop, frame_id)
+                self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval
 
-        result = self.async_queue.get_latest()
+            self.hamer_submit_counter += 1
 
-        if result["data"] is not None and result["error"] is None:
-            data = result["data"]
-            joints_3d = data["joints"]
-            vertices = data["vertices"]
-            faces = data["faces"]
-            self.stats["cache_age_ms"] = (time.time() - result["timestamp"]) * 1000.0
-            self.stats["error"] = None
-        elif result["error"] is not None:
-             self.stats["error"] = result["error"]
+            result = self.async_queue.get_latest()
+
+            if result["data"] is not None and result["error"] is None:
+                data = result["data"]
+                joints_3d = data["joints"]
+                vertices = data["vertices"]
+                faces = data["faces"]
+                self.stats["cache_age_ms"] = (time.time() - result["timestamp"]) * 1000.0
+                self.stats["error"] = None
+            elif result["error"] is not None:
+                 self.stats["error"] = result["error"]
         
         self.stats["hamer_ms"] = (time.time() - t_hamer_start) * 1000.0
 
@@ -695,7 +719,8 @@ class HybridHandPoseEstimator:
                 vertices=scaled_vertices,
                 faces=faces,
                 bbox=bbox,
-                timestamp=time.time()
+                timestamp=time.time(),
+                debug_crop=debug_crop
             )
         else:
             return None
@@ -771,12 +796,56 @@ def draw_hand_mesh(image, vertices, faces, intrinsics):
         cv2.polylines(image, [pts], True, (255, 255, 255), 1, cv2.LINE_AA)
 
 
+def draw_skeleton_2d(image, joints_3d, intrinsics):
+    """Draw 2D skeleton projected from 3D joints."""
+    if joints_3d is None: return
+
+    # MediaPipe/HaMeR 21 joint topology
+    # 0: Wrist
+    # 1-4: Thumb
+    # 5-8: Index
+    # 9-12: Middle
+    # 13-16: Ring
+    # 17-20: Pinky
+    
+    connections = [
+        (0, 1), (1, 2), (2, 3), (3, 4),           # Thumb
+        (0, 5), (5, 6), (6, 7), (7, 8),           # Index
+        (0, 9), (9, 10), (10, 11), (11, 12),      # Middle
+        (0, 13), (13, 14), (14, 15), (15, 16),    # Ring
+        (0, 17), (17, 18), (18, 19), (19, 20)     # Pinky
+    ]
+    
+    # Project all points
+    points_2d = []
+    for i in range(21):
+        pt_3d = joints_3d[i]
+        px = rs.rs2_project_point_to_pixel(intrinsics, pt_3d)
+        points_2d.append((int(px[0]), int(px[1])))
+    
+    # Draw connections
+    for start, end in connections:
+        pt1 = points_2d[start]
+        pt2 = points_2d[end]
+        
+        # Check bounds roughly
+        if not (0 <= pt1[0] < 3000 and 0 <= pt1[1] < 3000): continue
+        if not (0 <= pt2[0] < 3000 and 0 <= pt2[1] < 3000): continue
+
+        cv2.line(image, pt1, pt2, (0, 100, 255), 1)
+        
+    # Draw joints
+    for pt in points_2d:
+        cv2.circle(image, pt, 2, (0, 0, 255), -1)
+
+
 def draw_ui_overlay(
     image: np.ndarray,
     stats: Dict[str, float],
     fps: float,
     gripper_state: str,
-    wrist_depth: float
+    wrist_depth: float,
+    debug_crop: Optional[np.ndarray] = None
 ) -> None:
     h, w = image.shape[:2]
     
@@ -821,6 +890,23 @@ def draw_ui_overlay(
         
         cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}  Age: {age:.0f}ms [{status_text}]", 
                     (x_start + 10, y_start + 140), font, 0.45, color_status, 1)
+
+    # Draw Debug Crop if available
+    if debug_crop is not None:
+        try:
+            # Resize fit to 100x100
+            crop_viz = cv2.resize(debug_crop, (100, 100))
+            h_crop, w_crop = crop_viz.shape[:2]
+            
+            # Bottom Right
+            y_crop = h - h_crop - 10
+            x_crop = w - w_crop - 10
+            
+            image[y_crop:y_crop+h_crop, x_crop:x_crop+w_crop] = crop_viz
+            cv2.rectangle(image, (x_crop, y_crop), (x_crop+w_crop, y_crop+h_crop), (255, 255, 0), 1)
+            cv2.putText(image, "HaMeR Input", (x_crop, y_crop - 5), font, 0.4, (255, 255, 0), 1)
+        except Exception:
+            pass
 
 
 def main():
@@ -904,11 +990,12 @@ def main():
 
                 # Visualize (Mesh enabled for debugging)
                 draw_hand_mesh(color_img, pose.vertices, pose.faces, rs_cam.intrinsics)
+                draw_skeleton_2d(color_img, pose.joints_3d, rs_cam.intrinsics) # Synced Skeleton
                 draw_wrist_frame(color_img, wrist, v_app, v_norm, rs_cam.intrinsics)
 
                 stats = estimator.get_stats()
                 fps = 1.0 / (time.time() - t_start) if (time.time() - t_start) > 0 else 0
-                draw_ui_overlay(color_img, stats, fps, gripper_state, wrist[2])
+                draw_ui_overlay(color_img, stats, fps, gripper_state, wrist[2], pose.debug_crop)
 
             else:
                 cv2.putText(color_img, "No Hand Detected", (450, 360),
