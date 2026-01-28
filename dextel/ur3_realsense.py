@@ -236,6 +236,7 @@ def main():
         detector = DeXHandDetector()
         filter_3d = None
         filter_pinch = None
+        gripper_state = "OPEN"
         
         print("\n[INFO] Starting Realsense Hand Tracking")
         print("[INFO] Press 'q' to exit.")
@@ -278,9 +279,15 @@ def main():
                         thumb_tip = points_3d_filtered[4]
                         index_tip = points_3d_filtered[8]
                         
-                        # Apply filter to scalar pinch distance
                         raw_pinch = np.linalg.norm(thumb_tip - index_tip)
                         pinch_dist = float(filter_pinch(current_time, raw_pinch))
+
+                        if gripper_state == "OPEN":
+                            if pinch_dist < 0.05:
+                                gripper_state = "CLOSE"
+                        else:
+                            if pinch_dist > 0.1:
+                                gripper_state = "OPEN"
 
                         h, w = color_image.shape[:2]
                         wrist_px = (int(landmarks_2d.landmark[0].x * w), int(landmarks_2d.landmark[0].y * h))
@@ -300,13 +307,11 @@ def main():
                             px, py = int(pixel_normal[0]), int(pixel_normal[1])
                             if -1000 < px < 3000 and -1000 < py < 3000:
                                 cv2.arrowedLine(color_image, wrist_px, (px, py), (0, 255, 0), 3)
-                        if np.isnan(pinch_dist):
-                            pinch_str = "N/A"
-                        else:
-                            pinch_str = f"{pinch_dist*1000:.1f}mm"
                         
+                        # UI Display
+                        color = (0, 255, 0) if gripper_state == "OPEN" else (0, 0, 255)
                         cv2.putText(color_image, f"Wrist Z: {wrist[2]:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                        cv2.putText(color_image, f"Pinch: {pinch_str}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.putText(color_image, f"GRIPPER: {gripper_state}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
                     else:
                          cv2.putText(color_image, "Filtering Unstable", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
                 else:
