@@ -187,7 +187,7 @@ class MediaPipeBBoxDetector:
             max_num_hands=1,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
-            model_complexity=1  # Medium complexity for better accuracy
+            model_complexity=0
         )
 
         self.prev_bbox = None
@@ -343,13 +343,15 @@ class AsyncInferenceQueue:
         print("[INFO] AsyncInferenceQueue started.")
 
     def _worker(self):
+        print("[DEBUG] Worker thread started.")
         while self.running:
             try:
                 frame_crop, metadata = self.input_queue.get(timeout=1.0)
+                # print(f"[DEBUG] Worker got frame {metadata.get('frame_id')}")
 
-                # Run inference
                 try:
                     result = self.inference_fn(frame_crop)
+                    # print("[DEBUG] Inference successful")
 
                     with self.lock:
                         self.result_cache = {
@@ -360,6 +362,9 @@ class AsyncInferenceQueue:
                         }
 
                 except Exception as e:
+                    print(f"[ERROR] Inference failed: {e}")
+                    import traceback
+                    traceback.print_exc()
                     with self.lock:
                         self.result_cache["error"] = str(e)
                         self.result_cache["timestamp"] = time.time()
@@ -368,7 +373,7 @@ class AsyncInferenceQueue:
                 continue
 
             except Exception as e:
-                print(f"[ERROR] Worker thread error: {e}")
+                print(f"[ERROR] Worker thread loop error: {e}")
 
     def submit(self, frame_crop: np.ndarray, frame_id: int = -1) -> bool:
         try:
@@ -376,6 +381,7 @@ class AsyncInferenceQueue:
             self.input_queue.put_nowait((frame_crop, metadata))
             return True
         except queue.Full:
+            # print("[WARN] Async queue full, dropping frame")
             return False
 
     def get_latest(self) -> Dict[str, Any]:
@@ -573,7 +579,8 @@ class HybridHandPoseEstimator:
             "hamer_ms": 0.0,
             "fusion_ms": 0.0,
             "hamer_submit_rate": 0.0,
-            "cache_age_ms": 0.0
+            "cache_age_ms": 0.0,
+            "error": None
         }
 
     def _fuse_hamer_with_depth(
@@ -665,6 +672,9 @@ class HybridHandPoseEstimator:
             vertices = data["vertices"]
             faces = data["faces"]
             self.stats["cache_age_ms"] = (time.time() - result["timestamp"]) * 1000.0
+            self.stats["error"] = None
+        elif result["error"] is not None:
+             self.stats["error"] = result["error"]
         
         self.stats["hamer_ms"] = (time.time() - t_hamer_start) * 1000.0
 
@@ -800,11 +810,17 @@ def draw_ui_overlay(
                 
     # HaMeR Status
     age = stats['cache_age_ms']
-    color_status = (0, 255, 0) if age < 500 else (0, 0, 255)
-    status_text = "OK" if age < 500 else "LAG"
     
-    cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}  Age: {age:.0f}ms [{status_text}]", 
-                (x_start + 10, y_start + 140), font, 0.45, color_status, 1)
+    # Check for explicit error
+    if stats.get("error"):
+        error_msg = stats["error"]
+        cv2.putText(image, f"ERR: {error_msg[:20]}", (x_start + 10, y_start + 140), font, 0.45, (0, 0, 255), 1)
+    else:
+        color_status = (0, 255, 0) if age < 500 else (0, 0, 255)
+        status_text = "OK" if age < 500 else "LAG"
+        
+        cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}  Age: {age:.0f}ms [{status_text}]", 
+                    (x_start + 10, y_start + 140), font, 0.45, color_status, 1)
 
 
 def main():
