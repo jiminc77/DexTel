@@ -217,7 +217,6 @@ class DeXHandDetector:
         mp_drawing = mp.solutions.drawing_utils
         mp_hands = mp.solutions.hands
         
-        # Custom style for smaller dots
         landmark_style = mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=-1, circle_radius=2)
         connection_style = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1)
 
@@ -267,7 +266,7 @@ def main():
                     if filter_3d is None:
                         filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=0.5, beta=0.05, d_cutoff=1.0)
                     if filter_pinch is None:
-                        filter_pinch = OneEuroFilter(current_time, 0, min_cutoff=1.0, beta=0.01, d_cutoff=1.0)
+                        filter_pinch = OneEuroFilter(current_time, 0, min_cutoff=1.0, beta=1.0, d_cutoff=1.0)
                     
                     points_3d_filtered = filter_3d(current_time, points_3d)
                     
