@@ -41,13 +41,13 @@ class OneEuroFilter:
         return x_hat
 
 class RealSenseCamera:
-    def __init__(self, width=1280, height=720, fps=60):
+    def __init__(self, width=1280, height=720, fps=30):
         self.pipeline = rs.pipeline()
         self.config = rs.config()
         
-        # Depth: 848x480 @ 60 FPS
+        # Depth: 848x480 @ 30 FPS (Standard D455 High FPS mode)
         self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, fps)
-        # Color: 1280x720 @ 60 FPS
+        # Color: 1280x720 @ 30 FPS
         self.config.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
         
         print(f"[INFO] Initializing RealSense D455: Color {width}x{height}@{fps}, Depth 848x480@{fps}...")
@@ -94,7 +94,6 @@ class RealSenseCamera:
         if not depth_frame or not color_frame:
             raise RuntimeError("Received incomplete frames (missing depth or color).")
 
-        # Apply Filters to Depth
         filtered_depth = self.spatial.process(depth_frame)
         filtered_depth = self.temporal.process(filtered_depth)
         
@@ -138,10 +137,12 @@ class DeXHandDetector:
             min_tracking_confidence=min_tracking_confidence,
             model_complexity=1
         )
+        self.last_depths = np.zeros(21, dtype=np.float32)
 
     def detect_2d(self, rgb):
         results = self.hand_detector.process(rgb)
         if not results.multi_hand_landmarks:
+            self.last_depths.fill(0)
             return None, None
         
         # Only Right hand
@@ -150,26 +151,34 @@ class DeXHandDetector:
             if label == "Right":
                 return results.multi_hand_landmarks[i], label
         
+        self.last_depths.fill(0)
         return None, None
 
-    def get_3d_landmarks(self, landmarks_2d, depth_frame):
+    def get_3d_landmarks(self, landmarks_2d, depth_frame, rs_cam):
         h, w = rs_cam.intrinsics.height, rs_cam.intrinsics.width
         points_3d = []
         
-        for lm in landmarks_2d.landmark:
+        for i, lm in enumerate(landmarks_2d.landmark):
             u, v = lm.x * w, lm.y * h
             
             depth = rs_cam.get_pixel_depth(u, v, depth_frame, kernel_size=5) 
             
-            if depth is None:
-                return None
+            if depth is None or depth <= 0:
+                if self.last_depths[i] > 0:
+                    depth = self.last_depths[i]
+            else:
+                self.last_depths[i] = depth
+            
+            if depth is None or depth <= 0:
+                points_3d.append([np.nan, np.nan, np.nan])
+                continue
             
             point = rs_cam.deproject_pixel_to_point(u, v, depth)
             
             if point is None:
-                return None
-            
-            points_3d.append(point)
+                points_3d.append([np.nan, np.nan, np.nan])
+            else:
+                points_3d.append(point)
         
         return np.array(points_3d)
 
@@ -180,6 +189,10 @@ class DeXHandDetector:
         wrist = points_3d[0]
         index_mcp = points_3d[5]
         pinky_mcp = points_3d[17]
+        
+        # Check if critical keypoints are valid
+        if np.isnan(wrist).any() or np.isnan(index_mcp).any() or np.isnan(pinky_mcp).any():
+            return None, None, None
         
         v_approach = index_mcp - wrist
         v_approach_norm = np.linalg.norm(v_approach)
@@ -212,7 +225,7 @@ class DeXHandDetector:
 def main():
     rs_cam = None 
     try:
-        rs_cam = RealSenseCamera(fps=60)
+        rs_cam = RealSenseCamera(fps=30)
         
         detector = DeXHandDetector()
         filter_3d = None
@@ -231,47 +244,54 @@ def main():
             landmarks_2d, label = detector.detect_2d(rgb_image)
 
             if landmarks_2d:
-                points_3d = detector.get_3d_landmarks(landmarks_2d, depth_frame)
+                detector.draw_skeleton(color_image, landmarks_2d)
+
+                points_3d = detector.get_3d_landmarks(landmarks_2d, depth_frame, rs_cam)
                 
-                if points_3d is not None:
+                wrist, v_approach, v_normal = detector.estimate_wrist_frame(points_3d)
+                
+                if wrist is not None:
                     current_time = time.time()
                     if filter_3d is None:
                         filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=0.1, beta=1.0, d_cutoff=1.0)
                     
                     points_3d_filtered = filter_3d(current_time, points_3d)
                     
-                    wrist, v_approach, v_normal = detector.estimate_wrist_frame(points_3d_filtered)
+                    wrist_f, v_app_f, v_norm_f = detector.estimate_wrist_frame(points_3d_filtered)
                     
-                    thumb_tip = points_3d_filtered[4]
-                    index_tip = points_3d_filtered[8]
-                    pinch_dist = np.linalg.norm(thumb_tip - index_tip)
+                    if wrist_f is not None:
+                        wrist, v_approach, v_normal = wrist_f, v_app_f, v_norm_f
+                        
+                        thumb_tip = points_3d_filtered[4]
+                        index_tip = points_3d_filtered[8]
+                        pinch_dist = np.linalg.norm(thumb_tip - index_tip)
 
-                    h, w = color_image.shape[:2]
-                    wrist_px = (int(landmarks_2d.landmark[0].x * w), int(landmarks_2d.landmark[0].y * h))
-                    
-                    detector.draw_skeleton(color_image, landmarks_2d)
-                    
-                    vec_len = 0.1
-                    
-                    # Approach (Blue)
-                    p_approach = wrist + v_approach * vec_len
-                    pixel_approach = rs.rs2_project_point_to_pixel(rs_cam.intrinsics, p_approach)
-                    if not np.isnan(pixel_approach).any():
-                        cv2.arrowedLine(color_image, wrist_px, (int(pixel_approach[0]), int(pixel_approach[1])), (255, 0, 0), 3)
+                        h, w = color_image.shape[:2]
+                        wrist_px = (int(landmarks_2d.landmark[0].x * w), int(landmarks_2d.landmark[0].y * h))
+                        
+                        vec_len = 0.1
+                        
+                        p_approach = wrist + v_approach * vec_len
+                        pixel_approach = rs.rs2_project_point_to_pixel(rs_cam.intrinsics, p_approach)
+                        if not np.isnan(pixel_approach).any():
+                            px, py = int(pixel_approach[0]), int(pixel_approach[1])
+                            if -1000 < px < 3000 and -1000 < py < 3000:
+                                cv2.arrowedLine(color_image, wrist_px, (px, py), (255, 0, 0), 3)
 
-                    # Normal (Green)
-                    p_normal = wrist + v_normal * vec_len
-                    pixel_normal = rs.rs2_project_point_to_pixel(rs_cam.intrinsics, p_normal)
-                    if not np.isnan(pixel_normal).any():
-                        cv2.arrowedLine(color_image, wrist_px, (int(pixel_normal[0]), int(pixel_normal[1])), (0, 255, 0), 3)
-
-                    # Text Info
-                    cv2.putText(color_image, f"Wrist Z: {wrist[2]:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                    cv2.putText(color_image, f"Pinch: {pinch_dist*1000:.1f}mm", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                    cv2.putText(color_image, f"FPS: {rs_cam.profile.get_stream(rs.stream.color).fps}", (w-120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1)
+                        p_normal = wrist + v_normal * vec_len
+                        pixel_normal = rs.rs2_project_point_to_pixel(rs_cam.intrinsics, p_normal)
+                        if not np.isnan(pixel_normal).any():
+                            px, py = int(pixel_normal[0]), int(pixel_normal[1])
+                            if -1000 < px < 3000 and -1000 < py < 3000:
+                                cv2.arrowedLine(color_image, wrist_px, (px, py), (0, 255, 0), 3)
+                        cv2.putText(color_image, f"Wrist Z: {wrist[2]:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.putText(color_image, f"Pinch: {pinch_dist*1000:.1f}mm", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    else:
+                         cv2.putText(color_image, "Filtering Unstable", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
                 else:
-                    cv2.putText(color_image, "Invalid Depth - Hand Tracking Paused", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
+                    cv2.putText(color_image, "Depth Invalid for Keypoints", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+            cv2.putText(color_image, f"FPS: {rs_cam.profile.get_stream(rs.stream.color).fps}", (10, 700), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             cv2.imshow("Realsense D455 Hand Tracking", color_image)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -279,6 +299,8 @@ def main():
                 
     except Exception as e:
         print(f"[FATAL ERROR] {e}")
+        import traceback
+        traceback.print_exc()
         
     finally:
         if rs_cam:
