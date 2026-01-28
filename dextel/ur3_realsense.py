@@ -64,7 +64,7 @@ class RealSenseCamera:
         self.spatial.set_option(rs.option.filter_magnitude, 2)
         self.spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
         self.spatial.set_option(rs.option.filter_smooth_delta, 20)
-        self.spatial.set_option(rs.option.holes_fill, 0)
+        self.spatial.set_option(rs.option.holes_fill, 3)
         
         # Temporal Filter
         self.temporal = rs.temporal_filter()
