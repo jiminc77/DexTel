@@ -1,10 +1,3 @@
-"""
-DexTel Production-Ready Hand Tracking System
-Hybrid Pipeline: MediaPipe (BBox) + HaMeR (3D Joints) + RealSense (Depth Fusion)
-
-Optimized for RTX 5090 with asynchronous inference, graceful degradation, and production monitoring.
-"""
-
 import cv2
 import numpy as np
 import pyrealsense2 as rs
@@ -17,26 +10,16 @@ import warnings
 from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
-# ============================================================================
-# HaMeR Dependencies (Conditional Import with Graceful Degradation)
-# ============================================================================
-HAMER_AVAILABLE = False
-try:
-    import torch
-    from hamer.models import load_hamer, DEFAULT_CHECKPOINT
-    from hamer.datasets.vitdet_dataset import DEFAULT_MEAN, DEFAULT_STD
-    HAMER_AVAILABLE = True
-    print("[INFO] HaMeR dependencies loaded successfully.")
-except ImportError as e:
-    warnings.warn(f"HaMeR not available: {e}. Using MediaPipe-only fallback mode.")
+HAMER_AVAILABLE = True
+print("[INFO] Loading HaMeR dependencies...")
+import torch
+from hamer.models import load_hamer, DEFAULT_CHECKPOINT
+from hamer.datasets.vitdet_dataset import DEFAULT_MEAN, DEFAULT_STD
+print("[INFO] HaMeR dependencies loaded successfully.")
 
 
-# ============================================================================
-# Data Structures
-# ============================================================================
 @dataclass
 class HandPose:
-    """Hand pose representation with position, orientation, and joints."""
     position: np.ndarray  # Wrist position (3,) in meters
     approach: np.ndarray  # Approach vector (3,) - wrist to middle finger direction
     normal: np.ndarray    # Normal vector (3,) - perpendicular to palm
@@ -46,16 +29,7 @@ class HandPose:
     gripper_state: str = "OPEN"  # "OPEN" or "CLOSE"
 
 
-# ============================================================================
-# OneEuroFilter (Copied from ur3_realsense.py:8-41)
-# ============================================================================
 class OneEuroFilter:
-    """
-    Adaptive low-pass filter for reducing jitter in tracking data.
-
-    Reference: Casiez, G., Roussel, N., & Vogel, D. (2012).
-    1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems.
-    """
     def __init__(self, t0, x0, dx0=0.0, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
         self.min_cutoff = float(min_cutoff)
         self.beta = float(beta)
@@ -345,8 +319,6 @@ class HaMeRInferenceEngine:
     - CUDA OOM recovery
     """
     def __init__(self, device='cuda', use_fp16=True):
-        if not HAMER_AVAILABLE:
-            raise RuntimeError("HaMeR dependencies not available. Cannot initialize HaMeRInferenceEngine.")
 
         self.device = torch.device(device)
         self.use_fp16 = use_fp16 and device == 'cuda'
@@ -851,17 +823,8 @@ class HybridHandPoseEstimator:
     ):
         self.bbox_detector = bbox_detector
         self.rs_cam = rs_cam
-        self.use_hamer = use_hamer and HAMER_AVAILABLE
-
-        if self.use_hamer:
-            if hamer_engine is None or async_queue is None:
-                raise ValueError("HaMeR mode requires hamer_engine and async_queue")
-            self.hamer_engine = hamer_engine
-            self.async_queue = async_queue
-        else:
-            self.hamer_engine = None
-            self.async_queue = None
-            print("[INFO] HybridHandPoseEstimator in MediaPipe-only fallback mode")
+        self.hamer_engine = hamer_engine
+        self.async_queue = async_queue
 
         self.frame_estimator = RobustFrameEstimator()
 
@@ -878,32 +841,6 @@ class HybridHandPoseEstimator:
             "hamer_submit_rate": 0.0,
             "cache_age_ms": 0.0
         }
-
-    def _slerp(self, v0: np.ndarray, v1: np.ndarray, t: float) -> np.ndarray:
-        """
-        Spherical linear interpolation for rotation vectors.
-
-        Args:
-            v0: Start vector (3,)
-            v1: End vector (3,)
-            t: Interpolation parameter [0, 1]
-
-        Returns:
-            Interpolated vector (3,)
-        """
-        v0 = v0 / np.linalg.norm(v0)
-        v1 = v1 / np.linalg.norm(v1)
-        dot = np.clip(np.dot(v0, v1), -1.0, 1.0)
-
-        if dot > 0.9995:  # Nearly parallel, use linear interpolation
-            return (1 - t) * v0 + t * v1
-
-        theta = np.arccos(dot)
-        sin_theta = np.sin(theta)
-        w0 = np.sin((1 - t) * theta) / sin_theta
-        w1 = np.sin(t * theta) / sin_theta
-
-        return w0 * v0 + w1 * v1
 
     def _fuse_hamer_with_depth(
         self,
@@ -968,57 +905,63 @@ class HybridHandPoseEstimator:
         bbox, confidence, landmarks_2d = bbox_result
         self.stats["bbox_ms"] = (time.time() - t_start) * 1000.0
 
-        # 2. Get wrist depth from RealSense (BBox center-bottom)
+        # 2. Get wrist depth from RealSense using actual Wrist Landmark (Index 0)
         h, w = image_rgb.shape[:2]
-        wrist_px_x = bbox[0] + bbox[2] // 2
-        wrist_px_y = bbox[1] + bbox[3] - int(bbox[3] * 0.1)
+        
+        # Use MediaPipe wrist landmark explicitly
+        wrist_lm = landmarks_2d.landmark[0]
+        wrist_px_x = int(wrist_lm.x * w)
+        wrist_px_y = int(wrist_lm.y * h)
+        
+        # Clamp to image bounds
+        wrist_px_x = max(0, min(w - 1, wrist_px_x))
+        wrist_px_y = max(0, min(h - 1, wrist_px_y))
 
         wrist_depth_rs = self.rs_cam.get_pixel_depth(wrist_px_x, wrist_px_y, depth_frame, kernel_size=5)
 
         if wrist_depth_rs is None or wrist_depth_rs <= 0:
             return None
 
-        # 3. HaMeR inference (if enabled)
+        # 3. HaMeR inference
         joints_3d = None
+        t_hamer_start = time.time()
 
-        if self.use_hamer:
-            t_hamer_start = time.time()
+        # Adaptive submission rate based on motion
+        if self.prev_pose is not None:
+            # Check motion of bbox center
+            prev_cx = self.prev_pose.bbox[0] + self.prev_pose.bbox[2] // 2
+            prev_cy = self.prev_pose.bbox[1] + self.prev_pose.bbox[3] // 2
+            curr_cx = bbox[0] + bbox[2] // 2
+            curr_cy = bbox[1] + bbox[3] // 2
+            
+            motion = np.linalg.norm(
+                np.array([curr_cx, curr_cy]) - np.array([prev_cx, prev_cy])
+            )
 
-            # Adaptive submission rate based on motion
-            if self.prev_pose is not None:
-                motion = np.linalg.norm(
-                    np.array([wrist_px_x, wrist_px_y]) -
-                    np.array([self.prev_pose.bbox[0] + self.prev_pose.bbox[2] // 2,
-                             self.prev_pose.bbox[1] + self.prev_pose.bbox[3] - int(self.prev_pose.bbox[3] * 0.1)])
-                )
-
-                if motion > 50:  # Fast motion (pixels)
-                    self.hamer_interval = 2
-                elif motion > 20:
-                    self.hamer_interval = 4
-                else:
-                    self.hamer_interval = 6
-
-            # Submit to HaMeR queue periodically
-            if self.hamer_submit_counter % self.hamer_interval == 0:
-                x, y, w_box, h_box = bbox
-                crop = image_rgb[y:y+h_box, x:x+w_box]
-                submitted = self.async_queue.submit(crop, frame_id)
-                self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval  # FPS
-
-            self.hamer_submit_counter += 1
-
-            # Get latest HaMeR result
-            result = self.async_queue.get_latest()
-
-            if result["joints"] is not None and result["error"] is None:
-                joints_3d = result["joints"]
-                self.stats["cache_age_ms"] = (time.time() - result["timestamp"]) * 1000.0
+            if motion > 50:  # Fast motion (pixels)
+                self.hamer_interval = 2
+            elif motion > 20:
+                self.hamer_interval = 3
             else:
-                # No HaMeR result yet, fallback to MediaPipe
-                pass
+                self.hamer_interval = 4
 
-            self.stats["hamer_ms"] = (time.time() - t_hamer_start) * 1000.0
+        # Submit to HaMeR queue periodically
+        if self.hamer_submit_counter % self.hamer_interval == 0:
+            x, y, w_box, h_box = bbox
+            crop = image_rgb[y:y+h_box, x:x+w_box]
+            submitted = self.async_queue.submit(crop, frame_id)
+            self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval  # FPS
+
+        self.hamer_submit_counter += 1
+
+        # Get latest HaMeR result
+        result = self.async_queue.get_latest()
+
+        if result["joints"] is not None and result["error"] is None:
+            joints_3d = result["joints"]
+            self.stats["cache_age_ms"] = (time.time() - result["timestamp"]) * 1000.0
+        
+        self.stats["hamer_ms"] = (time.time() - t_hamer_start) * 1000.0
 
         # 4. Fusion and frame estimation
         t_fusion_start = time.time()
@@ -1041,28 +984,9 @@ class HybridHandPoseEstimator:
                 bbox=bbox,
                 timestamp=time.time()
             )
-
         else:
-            # Fallback: Use MediaPipe landmarks with RealSense depth
-            # (Simplified - could implement full MediaPipe 3D reconstruction here)
-            # For now, just use wrist position
-            wrist_3d = self.rs_cam.deproject_pixel_to_point(wrist_px_x, wrist_px_y, wrist_depth_rs)
-
-            if wrist_3d is None:
-                return None
-
-            # Estimate crude orientation from 2D landmarks
-            # This is less accurate than HaMeR but provides fallback
-            v_approach = np.array([0, 0, 1])  # Default forward
-            v_normal = np.array([0, 1, 0])    # Default up
-
-            pose = HandPose(
-                position=wrist_3d,
-                approach=v_approach,
-                normal=v_normal,
-                bbox=bbox,
-                timestamp=time.time()
-            )
+            # Waiting for first HaMeR result
+            return None
 
         self.stats["fusion_ms"] = (time.time() - t_fusion_start) * 1000.0
 
@@ -1128,73 +1052,60 @@ def draw_wrist_frame(
     cv2.circle(image, wrist_px, 5, (0, 255, 255), -1)
 
 
-def draw_gripper_state(
+def draw_ui_overlay(
     image: np.ndarray,
+    stats: Dict[str, float],
+    fps: float,
     gripper_state: str,
     wrist_depth: float
 ) -> None:
     """
-    Draw gripper state on image.
+    Draw organized UI overlay.
 
     Args:
         image: Image to draw on (modified in-place)
+        stats: Performance stats
+        fps: FPS val
         gripper_state: "OPEN" or "CLOSE"
-        wrist_depth: Wrist Z-depth for display
+        wrist_depth: Wrist Z in meters
     """
-    color = (0, 255, 0) if gripper_state == "OPEN" else (0, 0, 255)
-    cv2.putText(image, f"Wrist Z: {wrist_depth:.3f}m", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.putText(image, f"GRIPPER: {gripper_state}", (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-
-def draw_performance_stats(
-    image: np.ndarray,
-    stats: Dict[str, float],
-    fps: float,
-    use_hamer: bool
-) -> None:
-    """
-    Draw performance statistics on image.
-
-    Args:
-        image: Image to draw on (modified in-place)
-        stats: Performance stats dictionary
-        fps: Current FPS
-        use_hamer: Whether HaMeR mode is active
-    """
-    y_offset = image.shape[0] - 100
-
+    h, w = image.shape[:2]
+    
+    # Define panel area (Top-Left)
+    panel_w, panel_h = 320, 160
+    overlay = image.copy()
+    cv2.rectangle(overlay, (10, 10), (10 + panel_w, 10 + panel_h), (0, 0, 0), -1)
+    
+    # Blend overlay for transparency
+    alpha = 0.6
+    cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
+    
+    # Text configuration
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    color_text = (255, 255, 255)
+    color_val = (0, 255, 255)
+    
     # FPS
-    cv2.putText(image, f"FPS: {fps:.1f}", (10, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
+    cv2.putText(image, "FPS:", (20, 40), font, 0.6, color_text, 1)
+    cv2.putText(image, f"{fps:.1f}", (80, 40), font, 0.6, color_val, 2)
+    
     # Mode
-    mode = "HaMeR Hybrid" if use_hamer else "MediaPipe Only"
-    cv2.putText(image, f"Mode: {mode}", (10, y_offset + 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+    cv2.putText(image, "Mode: GPU (HaMeR)", (140, 40), font, 0.5, (0, 255, 0), 1)
 
-    if use_hamer:
-        # HaMeR stats
-        cv2.putText(
-            image,
-            f"BBox: {stats['bbox_ms']:.1f}ms | HaMeR: {stats['hamer_ms']:.1f}ms | Fusion: {stats['fusion_ms']:.1f}ms",
-            (10, y_offset + 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (200, 200, 200),
-            1
-        )
+    # Wrist Depth
+    cv2.putText(image, "Wrist Z:", (20, 70), font, 0.6, color_text, 1)
+    cv2.putText(image, f"{wrist_depth:.3f} m", (100, 70), font, 0.6, color_val, 2)
+    
+    # Gripper State
+    color_grip = (0, 255, 0) if gripper_state == "OPEN" else (0, 0, 255)
+    cv2.putText(image, "Gripper:", (20, 100), font, 0.6, color_text, 1)
+    cv2.putText(image, gripper_state, (100, 100), font, 0.7, color_grip, 2)
 
-        cv2.putText(
-            image,
-            f"HaMeR Rate: {stats['hamer_submit_rate']:.1f} FPS | Cache Age: {stats['cache_age_ms']:.0f}ms",
-            (10, y_offset + 70),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (200, 200, 200),
-            1
-        )
+    # Timings
+    cv2.putText(image, f"BBox: {stats['bbox_ms']:.1f}ms   HaMeR: {stats['hamer_ms']:.1f}ms", 
+                (20, 130), font, 0.45, (200, 200, 200), 1)
+    cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}fps  Age: {stats['cache_age_ms']:.0f}ms", 
+                (20, 150), font, 0.45, (200, 200, 200), 1)
 
 
 # ============================================================================
@@ -1219,30 +1130,21 @@ def main():
         print("[2/5] Initializing MediaPipe BBox Detector...")
         bbox_detector = MediaPipeBBoxDetector()
 
-        # 3. Initialize HaMeR (if available)
-        use_hamer = HAMER_AVAILABLE
-        hamer_engine = None
-        async_queue = None
-
-        if use_hamer:
-            print("[3/5] Initializing HaMeR Inference Engine...")
-            try:
-                hamer_engine = HaMeRInferenceEngine(device='cuda', use_fp16=True)
-                async_queue = AsyncInferenceQueue(hamer_engine.infer, max_queue_size=2)
-                print("[INFO] HaMeR mode ENABLED (RTX 5090 FP16)")
-            except Exception as e:
-                print(f"[WARN] HaMeR initialization failed: {e}")
-                print("[WARN] Falling back to MediaPipe-only mode")
-                use_hamer = False
-        else:
-            print("[3/5] HaMeR not available. Using MediaPipe-only mode.")
+        # 3. Initialize HaMeR
+        print("[3/5] Initializing HaMeR Inference Engine (GPU Only)...")
+        try:
+            hamer_engine = HaMeRInferenceEngine(device='cuda', use_fp16=True)
+            async_queue = AsyncInferenceQueue(hamer_engine.infer, max_queue_size=2)
+            print("[INFO] HaMeR mode ENABLED (RTX 5090 FP16)")
+        except Exception as e:
+            raise RuntimeError(f"FATAL: HaMeR initialization failed. GPU Required. Error: {e}")
 
         # 4. Initialize HybridHandPoseEstimator
         print("[4/5] Initializing Hybrid Hand Pose Estimator...")
         estimator = HybridHandPoseEstimator(
             bbox_detector=bbox_detector,
             rs_cam=rs_cam,
-            use_hamer=use_hamer,
+            use_hamer=True,
             hamer_engine=hamer_engine,
             async_queue=async_queue
         )
@@ -1298,18 +1200,19 @@ def main():
                 # Visualize wrist frame
                 draw_wrist_frame(color_img, wrist, v_app, v_norm, rs_cam.intrinsics)
 
-                # Display gripper state
-                draw_gripper_state(color_img, gripper_state, wrist[2])
+                # Update UI with gripper state
+                stats = estimator.get_stats()
+                fps = 1.0 / (time.time() - t_start) if (time.time() - t_start) > 0 else 0
+                draw_ui_overlay(color_img, stats, fps, gripper_state, wrist[2])
 
             else:
                 # No hand detected
-                cv2.putText(color_img, "No Hand Detected", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-            # Display performance stats
-            fps = 1.0 / (time.time() - t_start) if (time.time() - t_start) > 0 else 0
-            stats = estimator.get_stats()
-            draw_performance_stats(color_img, stats, fps, use_hamer)
+                cv2.putText(color_img, "No Hand Detected", (450, 360),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                
+                # Still show FPS if running
+                fps = 1.0 / (time.time() - t_start) if (time.time() - t_start) > 0 else 0
+                cv2.putText(color_img, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
             # Show image
             cv2.imshow("DexTel - HaMeR Hybrid Hand Tracking", color_img)
