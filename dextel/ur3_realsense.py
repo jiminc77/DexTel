@@ -184,35 +184,6 @@ class DeXHandDetector:
         return np.array(points_3d)
 
     @staticmethod
-    # def estimate_wrist_frame(points_3d):
-    #     if points_3d is None or points_3d.shape[0] < 21: return None, None, None
-        
-    #     wrist = points_3d[0]
-    #     index_mcp = points_3d[5]
-    #     pinky_mcp = points_3d[17]
-        
-    #     if np.isnan(wrist).any() or np.isnan(index_mcp).any() or np.isnan(pinky_mcp).any():
-    #         return None, None, None
-        
-    #     v_approach = index_mcp - wrist
-    #     v_approach_norm = np.linalg.norm(v_approach)
-    #     if v_approach_norm > 1e-6:
-    #         v_approach /= v_approach_norm
-    #     else:
-    #         v_approach = np.array([0., 0., 1.])
-
-    #     v_palm_span = pinky_mcp - index_mcp
-    #     v_normal = np.cross(v_approach, v_palm_span)
-    #     v_normal_norm = np.linalg.norm(v_normal)
-
-    #     if v_normal_norm > 1e-6:
-    #         v_normal /= v_normal_norm
-    #     else:
-    #         v_normal = np.array([0., 1., 0.])
-            
-    #     return wrist, v_approach, v_normal
-
-    @staticmethod
     def estimate_wrist_frame(points_3d):
         if points_3d is None or points_3d.shape[0] < 21: 
             return None, None, None
