@@ -667,14 +667,9 @@ class HybridHandPoseEstimator:
         # Save for debug visualization
         debug_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
         
-        # EXPERIMENTAL: Try BGR for HaMeR
-        # Standard ViT/PyTorch models usually want RGB, but if mean pose persists,
-        # checking BGR is a valid sanity check (sometimes libs assume BGR)
-        hamer_input = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR) 
-
         if SYNC_MODE:
             # Synchronous Inference (Main Thread)
-            result_data = self.hamer_engine.infer(hamer_input)
+            result_data = self.hamer_engine.infer(crop)
             if result_data is not None:
                 joints_3d = result_data["joints"]
                 vertices = result_data["vertices"]
@@ -688,7 +683,7 @@ class HybridHandPoseEstimator:
         else:
             # Async Mode
             if self.hamer_submit_counter % self.hamer_interval == 0:
-                self.async_queue.submit(hamer_input, frame_id)
+                self.async_queue.submit(crop, frame_id)
                 self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval
 
             self.hamer_submit_counter += 1
@@ -987,8 +982,8 @@ def main():
                 break
 
             rgb_img = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
-            rgb_img = cv2.flip(rgb_img, 1)
-            color_img = cv2.flip(color_img, 1)
+            # rgb_img = cv2.flip(rgb_img, 1) # Disabled to fix chirality
+            # color_img = cv2.flip(color_img, 1) # Disabled to fix chirality
 
             pose = estimator.estimate_pose(rgb_img, depth_frame, frame_count)
 
