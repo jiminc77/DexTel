@@ -17,8 +17,8 @@ warnings.filterwarnings("ignore")
 
 # Constants
 HAMER_CONFIDENCE_THRESH = 0.5
-PINCH_CLOSE_THRESH = 0.03  # meters (3cm)
-PINCH_OPEN_THRESH = 0.08   # meters (8cm)
+PINCH_CLOSE_THRESH = 0.07  # meters (7cm)
+PINCH_OPEN_THRESH = 0.12   # meters (12cm)
 WRIST_FRAME_SMOOTH_ALPHA = 0.6 # Lower = smoother, Higher = faster
 
 @dataclass
@@ -86,11 +86,12 @@ class RobustTracker:
         print("[INFO] Loading HaMeR Model...")
         self.model, self.model_cfg = load_hamer(DEFAULT_CHECKPOINT)
         self.model = self.model.to(self.device).eval()
-        self.model = self.model.half() # FP16 for speed
+        self.model = self.model.to(self.device).eval()
+        # self.model = self.model.half() # FP16 disabled for stability
         
         # Stats
-        self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).half().view(3, 1, 1)
-        self.std = torch.tensor([0.229, 0.224, 0.225], device=self.device).half().view(3, 1, 1)
+        self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(3, 1, 1).float()
+        self.std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(3, 1, 1).float()
         
         # State
         self.prev_box = None
@@ -288,7 +289,7 @@ class RobustTracker:
             # Preprocess
             _inp = cv2.resize(crop_input, (256, 256))
             _inp = torch.from_numpy(_inp).float().to(self.device) / 255.0
-            _inp = _inp.half()
+            # _inp = _inp.half()
             _inp = _inp.permute(2, 0, 1).unsqueeze(0)
             _inp = (_inp - self.mean) / self.std
             
