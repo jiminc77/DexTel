@@ -67,9 +67,6 @@ class OneEuroFilter:
         return x_hat
 
 
-# ============================================================================
-# RealSenseCamera (Enhanced from ur3_realsense.py:43-129)
-# ============================================================================
 class RealSenseCamera:
     """RealSense D455 camera interface with depth filtering."""
     def __init__(self, width=1280, height=720, fps=30):
@@ -138,17 +135,6 @@ class RealSenseCamera:
         return color_image, filtered_depth, color_frame
 
     def get_pixel_depth(self, u, v, depth_frame, kernel_size=5):
-        """
-        Get robust depth at pixel (u, v) using median of kernel.
-
-        Args:
-            u, v: Pixel coordinates
-            depth_frame: RealSense depth frame
-            kernel_size: Size of sampling kernel (must be odd)
-
-        Returns:
-            Median depth in meters, or None if no valid depths
-        """
         depths = []
         half_k = kernel_size // 2
 
@@ -168,20 +154,12 @@ class RealSenseCamera:
         return np.median(depths)
 
     def deproject_pixel_to_point(self, u, v, depth):
-        """Convert pixel (u, v) with depth to 3D point in camera frame."""
         if depth <= 0:
             return None
         point = rs.rs2_deproject_pixel_to_point(self.intrinsics, [u, v], depth)
         return np.array(point)
 
     def get_depth_quality_metrics(self, depth_frame) -> Dict[str, float]:
-        """
-        Compute depth quality metrics for monitoring.
-
-        Returns:
-            Dictionary with valid_pixels, total_pixels, median_depth
-        """
-        # Convert to numpy array
         depth_image = np.asanyarray(depth_frame.get_data())
 
         valid_mask = depth_image > 0
@@ -202,15 +180,10 @@ class RealSenseCamera:
         return self.last_depth_quality
 
     def stop(self):
-        """Stop the camera pipeline."""
         self.pipeline.stop()
 
 
-# ============================================================================
-# MediaPipeBBoxDetector (New - Lightweight)
-# ============================================================================
 class MediaPipeBBoxDetector:
-    """Fast hand bounding box detection using MediaPipe."""
     def __init__(self, min_detection_confidence=0.5, min_tracking_confidence=0.5):
         self.mp_hands = mp.solutions.hands
         self.hand_detector = self.mp_hands.Hands(
@@ -226,19 +199,15 @@ class MediaPipeBBoxDetector:
         self.bbox_alpha = 0.7  # Exponential moving average weight
 
     def detect_bbox(self, image_rgb) -> Optional[Tuple[list, float, Any]]:
-        """
-        Detect hand bounding box.
+        h, w, _ = image_rgb.shape
+        results = self.hand_detector.process(image_rgb)
 
-        Args:
-            image_rgb: RGB image (HxWx3)
+        if not results.multi_hand_landmarks:
+            self.prev_bbox = None
+            return None
 
-        Returns:
-            Tuple of (bbox, confidence, landmarks_2d) where:
-                - bbox: [x, y, w, h] with adaptive padding
-                - confidence: Detection confidence [0, 1]
-                - landmarks_2d: MediaPipe landmarks (for fallback)
-            Or None if no hand detected
-        """
+        # Use first detected hand
+        landmarks = results.multi_hand_landmarks[0]
         h, w, _ = image_rgb.shape
         results = self.hand_detector.process(image_rgb)
 
@@ -287,15 +256,10 @@ class MediaPipeBBoxDetector:
         return bbox, confidence, landmarks
 
     def reset(self):
-        """Reset temporal state."""
         self.prev_bbox = None
 
 
-# ============================================================================
-# HaMeRInferenceEngine (New - Core GPU Component)
-# ============================================================================
 class HaMeRInferenceEngine:
-    """HaMeR model management and inference (RTX 5090 Optimized)."""
     def __init__(self, device='cuda', use_fp16=True):
         self.device = torch.device(device)
         self.use_fp16 = use_fp16 and device == 'cuda'
@@ -327,28 +291,11 @@ class HaMeRInferenceEngine:
             raise RuntimeError(f"Failed to load HaMeR model: {e}")
 
     def _preprocess(self, image_crop: np.ndarray) -> torch.Tensor:
-        """
-        Preprocess image crop for HaMeR input.
-
-        Args:
-            image_crop: RGB image crop (HxWx3), uint8
-
-        Returns:
-            Preprocessed tensor (1, 3, 256, 256)
-        """
-        # Resize to 256x256 (HaMeR input size)
         img_resized = cv2.resize(image_crop, (256, 256), interpolation=cv2.INTER_LINEAR)
-
-        # Convert to tensor and normalize to [0, 1]
         img_tensor = torch.from_numpy(img_resized).float() / 255.0
 
-        # HWC -> CHW
         img_tensor = img_tensor.permute(2, 0, 1)
-
-        # Normalize with ImageNet statistics
-        img_tensor = (img_tensor - self.mean) / self.std
-
-        # Add batch dimension
+        img_tensor = (img_tensor - self.mean) / self.std    
         img_tensor = img_tensor.unsqueeze(0)
 
         if self.use_fp16:
@@ -384,19 +331,8 @@ class HaMeRInferenceEngine:
             return None
 
 
-# ============================================================================
-# AsyncInferenceQueue (New - Performance Critical)
-# ============================================================================
 class AsyncInferenceQueue:
-    """Non-blocking asynchronous inference queue for HaMeR."""
     def __init__(self, inference_fn, max_queue_size=2):
-        """
-        Initialize async inference queue.
-
-        Args:
-            inference_fn: Callable that takes image_crop and returns joints_3d
-            max_queue_size: Maximum pending requests (old requests dropped)
-        """
         self.inference_fn = inference_fn
         self.input_queue = queue.Queue(maxsize=max_queue_size)
         self.result_cache = {
@@ -407,25 +343,19 @@ class AsyncInferenceQueue:
         }
         self.lock = threading.Lock()
         self.running = True
-
-        # Spawn background worker thread
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
 
         print("[INFO] AsyncInferenceQueue started.")
 
     def _worker(self):
-        """Background worker thread for inference processing."""
         while self.running:
             try:
-                # Wait for input with timeout
                 frame_crop, metadata = self.input_queue.get(timeout=1.0)
 
-                # Run inference
                 try:
                     result = self.inference_fn(frame_crop)
 
-                    # Update cache
                     with self.lock:
                         self.result_cache = {
                             "data": result,
@@ -435,57 +365,29 @@ class AsyncInferenceQueue:
                         }
 
                 except Exception as e:
-                    # Inference error
                     with self.lock:
                         self.result_cache["error"] = str(e)
                         self.result_cache["timestamp"] = time.time()
 
             except queue.Empty:
-                # No new requests, continue waiting
                 continue
 
             except Exception as e:
                 print(f"[ERROR] Worker thread error: {e}")
 
     def submit(self, frame_crop: np.ndarray, frame_id: int = -1) -> bool:
-        """
-        Submit frame crop for inference (non-blocking).
-
-        Args:
-            frame_crop: RGB image crop (HxWx3)
-            frame_id: Frame ID for tracking
-
-        Returns:
-            True if submitted successfully, False if queue full (frame dropped)
-        """
         try:
             metadata = {"frame_id": frame_id, "submit_time": time.time()}
             self.input_queue.put_nowait((frame_crop, metadata))
             return True
         except queue.Full:
-            # Queue full, drop frame
             return False
 
     def get_latest(self) -> Dict[str, Any]:
-        """
-        Get latest inference result from cache (immediate, non-blocking).
-
-        Returns:
-            Dictionary with keys: joints, timestamp, error, frame_id
-        """
         with self.lock:
             return self.result_cache.copy()
 
     def is_result_fresh(self, max_age_ms: float = 200.0) -> bool:
-        """
-        Check if cached result is fresh enough.
-
-        Args:
-            max_age_ms: Maximum age in milliseconds
-
-        Returns:
-            True if result age < max_age_ms, False otherwise
-        """
         with self.lock:
             if self.result_cache["data"] is None:
                 return False
@@ -494,52 +396,32 @@ class AsyncInferenceQueue:
             return age_ms < max_age_ms
 
     def stop(self):
-        """Stop the worker thread."""
         self.running = False
         if self.worker_thread.is_alive():
             self.worker_thread.join(timeout=2.0)
         print("[INFO] AsyncInferenceQueue stopped.")
 
-
-# ============================================================================
-# RobustFrameEstimator (Enhanced from ur3_realsense.py:186-233)
-# ============================================================================
 class RobustFrameEstimator:
-    """Robust wrist frame estimation using SVD."""
     def __init__(self):
         self.prev_normal = None
         self.prev_approach = None
 
     @staticmethod
     def estimate_wrist_frame(joints_3d: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        Estimate wrist frame from 3D joints using SVD.
-
-        Args:
-            joints_3d: (21, 3) array of 3D joint positions
-
-        Returns:
-            Tuple of (wrist_pos, approach_vec, normal_vec) or (None, None, None) on failure
-        """
         if joints_3d is None or joints_3d.shape[0] < 21:
             return None, None, None
 
-        # Check for NaN values
         if np.isnan(joints_3d).any():
             return None, None, None
 
-        # Palm keypoints: Wrist(0), Index MCP(5), Middle MCP(9), Ring MCP(13), Pinky MCP(17)
         palm_indices = [0, 5, 9, 13, 17]
         palm_points = joints_3d[palm_indices]
 
-        # Check for invalid palm points
         if np.isnan(palm_points).any():
             return None, None, None
 
-        # Compute centroid
         centroid = np.mean(palm_points, axis=0)
 
-        # Outlier rejection: Remove points > 2σ from centroid
         centered_points = palm_points - centroid
         distances = np.linalg.norm(centered_points, axis=1)
         std_dist = np.std(distances)
@@ -555,7 +437,6 @@ class RobustFrameEstimator:
         else:
             centered_points = palm_points - centroid
 
-        # SVD to find palm normal (smallest singular vector)
         try:
             u, s, vt = np.linalg.svd(centered_points)
         except np.linalg.LinAlgError:
@@ -563,26 +444,18 @@ class RobustFrameEstimator:
 
         normal_vec = vt[-1]
 
-        # Direction correction: Palm normal should point "up" (back of hand)
-        # Use cross product of (Index - Wrist) × (Pinky - Wrist) as reference
-        # Ref vec points DOWN (into palm/table) for palm-down hand
         wrist = joints_3d[0]
         ref_vec = np.cross(joints_3d[5] - wrist, joints_3d[17] - wrist)
 
-        # We want normal to point UP (Opposite to ref_vec)
-        # If aligned (dot > 0), flip it.
         if np.dot(normal_vec, ref_vec) > 0:
             normal_vec = -normal_vec
 
-        # Normalize
         norm_magnitude = np.linalg.norm(normal_vec)
         if norm_magnitude > 1e-6:
             v_normal = normal_vec / norm_magnitude
         else:
             v_normal = np.array([0., 1., 0.])
 
-        # Approach vector: Wrist(0) → Middle MCP(9)
-        # Using middle finger instead of index for better stability during pinch
         v_approach = joints_3d[9] - joints_3d[0]
         v_approach_norm = np.linalg.norm(v_approach)
 
@@ -591,7 +464,6 @@ class RobustFrameEstimator:
         else:
             v_approach = np.array([0., 0., 1.])
 
-        # Orthogonalize approach to normal (Gram-Schmidt)
         v_approach = v_approach - np.dot(v_approach, v_normal) * v_normal
         v_approach_norm = np.linalg.norm(v_approach)
 
@@ -603,43 +475,25 @@ class RobustFrameEstimator:
         return wrist, v_approach, v_normal
 
     def estimate_with_temporal_check(self, joints_3d: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        Estimate wrist frame with temporal consistency check.
-
-        Args:
-            joints_3d: (21, 3) array of 3D joint positions
-
-        Returns:
-            Tuple of (wrist_pos, approach_vec, normal_vec) or (None, None, None) on failure
-        """
         wrist, v_approach, v_normal = self.estimate_wrist_frame(joints_3d)
 
         if wrist is None:
             return None, None, None
 
-        # Temporal consistency check: Reject sudden orientation flips
         if self.prev_normal is not None and self.prev_approach is not None:
-            # Check if normal flipped (dot product < threshold)
             normal_dot = np.dot(v_normal, self.prev_normal)
             approach_dot = np.dot(v_approach, self.prev_approach)
 
             if normal_dot < 0.7 or approach_dot < 0.7:
-                # Sudden flip detected, likely error
                 print("[WARN] Orientation flip detected, using previous frame")
                 return None, None, None
 
-        # Update history
         self.prev_normal = v_normal.copy()
         self.prev_approach = v_approach.copy()
 
         return wrist, v_approach, v_normal
 
-
-# ============================================================================
-# PinchDetector (Enhanced from ur3_realsense.py:299-310)
-# ============================================================================
 class PinchDetector:
-    """Adaptive pinch detection with calibration."""
     def __init__(self):
         self.calibrated_open_dist = None
         self.calibration_samples = []
@@ -647,22 +501,14 @@ class PinchDetector:
         self.gripper_state = "OPEN"
 
     def start_calibration(self):
-        """Start calibration process."""
         self.calibration_samples = []
         self.calibrating = True
         print("[INFO] Pinch calibration started. Hold hand OPEN for 2 seconds...")
 
     def update_calibration(self, joints_3d: np.ndarray):
-        """
-        Update calibration with current joints.
-
-        Args:
-            joints_3d: (21, 3) array of 3D joint positions
-        """
         if not self.calibrating:
             return
 
-        # Compute thumb-index distance
         thumb_tip = joints_3d[4]
         index_tip = joints_3d[8]
         dist = np.linalg.norm(thumb_tip - index_tip)
@@ -675,45 +521,30 @@ class PinchDetector:
             print(f"[INFO] Pinch calibration complete. Open distance: {self.calibrated_open_dist:.4f}m")
 
     def detect(self, joints_3d: np.ndarray) -> str:
-        """
-        Detect pinch state with hysteresis.
-
-        Args:
-            joints_3d: (21, 3) array of 3D joint positions
-
-        Returns:
-            "OPEN" or "CLOSE"
-        """
         if joints_3d is None or joints_3d.shape[0] < 21:
             return self.gripper_state
 
-        # Update calibration if in progress
         if self.calibrating:
             self.update_calibration(joints_3d)
             return self.gripper_state
 
-        # If not calibrated, use default behavior
         if self.calibrated_open_dist is None:
             thumb_tip = joints_3d[4]
             index_tip = joints_3d[8]
             dist = np.linalg.norm(thumb_tip - index_tip)
-
-            # Default thresholds (will be less accurate)
-            if self.gripper_state == "OPEN" and dist < 0.03:
+            if self.gripper_state == "OPEN" and dist < 0.07:
                 self.gripper_state = "CLOSE"
-            elif self.gripper_state == "CLOSE" and dist > 0.06:
+            elif self.gripper_state == "CLOSE" and dist > 0.12:
                 self.gripper_state = "OPEN"
 
             return self.gripper_state
 
-        # Compute current distance
         thumb_tip = joints_3d[4]
         index_tip = joints_3d[8]
         dist = np.linalg.norm(thumb_tip - index_tip)
 
-        # Adaptive thresholds with hysteresis
-        threshold_close = self.calibrated_open_dist * 0.4  # Close if < 40% of open
-        threshold_open = self.calibrated_open_dist * 0.6   # Open if > 60% of open
+        threshold_close = self.calibrated_open_dist * 0.4
+        threshold_open = self.calibrated_open_dist * 0.6
 
         if self.gripper_state == "OPEN" and dist < threshold_close:
             self.gripper_state = "CLOSE"
@@ -722,12 +553,7 @@ class PinchDetector:
 
         return self.gripper_state
 
-
-# ============================================================================
-# HybridHandPoseEstimator (New - Main Orchestrator)
-# ============================================================================
 class HybridHandPoseEstimator:
-    """Hybrid hand pose estimation (MediaPipe + HaMeR + RealSense)."""
     def __init__(
         self,
         bbox_detector: MediaPipeBBoxDetector,
@@ -743,12 +569,10 @@ class HybridHandPoseEstimator:
 
         self.frame_estimator = RobustFrameEstimator()
 
-        # State tracking
         self.prev_pose = None
         self.hamer_submit_counter = 0
-        self.hamer_interval = 6  # Submit every 6 frames (5 FPS) initially
+        self.hamer_interval = 6
 
-        # Performance stats
         self.stats = {
             "bbox_ms": 0.0,
             "hamer_ms": 0.0,
@@ -787,20 +611,8 @@ class HybridHandPoseEstimator:
         depth_frame,
         frame_id: int
     ) -> Optional[HandPose]:
-        """
-        Estimate hand pose from RGB-D frame.
-
-        Args:
-            image_rgb: RGB image (HxWx3)
-            depth_frame: RealSense depth frame
-            frame_id: Current frame ID
-
-        Returns:
-            HandPose object or None if hand not detected
-        """
         t_start = time.time()
 
-        # 1. Detect BBox with MediaPipe
         bbox_result = self.bbox_detector.detect_bbox(image_rgb)
 
         if bbox_result is None:
@@ -810,15 +622,12 @@ class HybridHandPoseEstimator:
         bbox, confidence, landmarks_2d = bbox_result
         self.stats["bbox_ms"] = (time.time() - t_start) * 1000.0
 
-        # 2. Get wrist depth from RealSense using actual Wrist Landmark (Index 0)
         h, w = image_rgb.shape[:2]
         
-        # Use MediaPipe wrist landmark explicitly
         wrist_lm = landmarks_2d.landmark[0]
         wrist_px_x = int(wrist_lm.x * w)
         wrist_px_y = int(wrist_lm.y * h)
         
-        # Clamp to image bounds
         wrist_px_x = max(0, min(w - 1, wrist_px_x))
         wrist_px_y = max(0, min(h - 1, wrist_px_y))
 
@@ -827,7 +636,6 @@ class HybridHandPoseEstimator:
         if wrist_depth_rs is None or wrist_depth_rs <= 0:
             return None
 
-        # 3. HaMeR inference
         joints_3d = None
         vertices = None
         faces = None
@@ -894,13 +702,9 @@ class HybridHandPoseEstimator:
         return pose
 
     def get_stats(self) -> Dict[str, float]:
-        """Get performance statistics."""
         return self.stats.copy()
 
 
-# ============================================================================
-# Visualization Helper Functions
-# ============================================================================
 def draw_wrist_frame(image, wrist, v_approach, v_normal, intrinsics):
     vec_len = 0.1
     wrist_px = rs.rs2_project_point_to_pixel(intrinsics, wrist)
@@ -927,38 +731,24 @@ def draw_wrist_frame(image, wrist, v_approach, v_normal, intrinsics):
 
 def draw_hand_mesh(image, vertices, faces, intrinsics):
     if vertices is None or faces is None: return
-
-    # Project all vertices
-    # Note: rs2_project_point_to_pixel is single point. For performance we might loop or use approx.
-    # For now, let's loop over vertices (MANO has ~778 vertices, fast enough in Python)
     
     pixels = []
     w, h = image.shape[1], image.shape[0]
 
-    # Vectorized projection would be better but requires custom intrinsics matrix multiplication
-    # Let's do a quick intrinsics projection manually to be fast
     fx, fy = intrinsics.fx, intrinsics.fy
     cx, cy = intrinsics.ppx, intrinsics.ppy
     
-    # Z > 0 check
     valid_mask = vertices[:, 2] > 0
     if not np.any(valid_mask): return
 
-    # x = X/Z * fx + cx
-    # y = Y/Z * fy + cy
     v_z = vertices[:, 2]
     v_x = vertices[:, 0] / v_z * fx + cx
     v_y = vertices[:, 1] / v_z * fy + cy
 
     points = np.stack([v_x, v_y], axis=1).astype(np.int32)
     
-    # Draw wireframe (subset of edges for speed, or all faces)
-    # Drawing all faces might be dense. Let's draw points for now to ensure speed
-    # OPTION: Draw mesh edges
-    
     for face in faces:
         pts = points[face]
-        # Check bounds
         if np.any(pts < 0) or np.any(pts[:, 0] >= w) or np.any(pts[:, 1] >= h): continue
         
         cv2.polylines(image, [pts], True, (255, 255, 255), 1, cv2.LINE_AA)
@@ -971,19 +761,8 @@ def draw_ui_overlay(
     gripper_state: str,
     wrist_depth: float
 ) -> None:
-    """
-    Draw organized UI overlay.
-
-    Args:
-        image: Image to draw on (modified in-place)
-        stats: Performance stats
-        fps: FPS val
-        gripper_state: "OPEN" or "CLOSE"
-        wrist_depth: Wrist Z in meters
-    """
     h, w = image.shape[:2]
     
-    # Define panel area (Top-Right)
     panel_w, panel_h = 320, 160
     x_start = w - panel_w - 10
     y_start = 10
@@ -991,43 +770,32 @@ def draw_ui_overlay(
     overlay = image.copy()
     cv2.rectangle(overlay, (x_start, y_start), (x_start + panel_w, y_start + panel_h), (0, 0, 0), -1)
     
-    # Blend overlay for transparency
     alpha = 0.6
     cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
     
-    # Text configuration
     font = cv2.FONT_HERSHEY_SIMPLEX
     color_text = (255, 255, 255)
     color_val = (0, 255, 255)
     
-    # FPS
     cv2.putText(image, "FPS:", (x_start + 10, y_start + 30), font, 0.6, color_text, 1)
     cv2.putText(image, f"{fps:.1f}", (x_start + 70, y_start + 30), font, 0.6, color_val, 2)
     
-    # Mode
     cv2.putText(image, "GPU (HaMeR)", (x_start + 130, y_start + 30), font, 0.5, (0, 255, 0), 1)
 
-    # Wrist Depth
     cv2.putText(image, "Wrist Z:", (x_start + 10, y_start + 60), font, 0.6, color_text, 1)
     cv2.putText(image, f"{wrist_depth:.3f} m", (x_start + 90, y_start + 60), font, 0.6, color_val, 2)
     
-    # Gripper State
     color_grip = (0, 255, 0) if gripper_state == "OPEN" else (0, 0, 255)
     cv2.putText(image, "Gripper:", (x_start + 10, y_start + 90), font, 0.6, color_text, 1)
     cv2.putText(image, gripper_state, (x_start + 90, y_start + 90), font, 0.7, color_grip, 2)
 
-    # Timings
     cv2.putText(image, f"BBox: {stats['bbox_ms']:.1f}  HaMeR: {stats['hamer_ms']:.1f}", 
                 (x_start + 10, y_start + 120), font, 0.45, (200, 200, 200), 1)
     cv2.putText(image, f"Rate: {stats['hamer_submit_rate']:.1f}  Age: {stats['cache_age_ms']:.0f}ms", 
                 (x_start + 10, y_start + 140), font, 0.45, (200, 200, 200), 1)
 
 
-# ============================================================================
-# Main Function
-# ============================================================================
 def main():
-    """Production-ready hand tracking main loop."""
     print("=" * 80)
     print("DexTel Production Hand Tracking System")
     print("Hybrid Pipeline: MediaPipe + HaMeR + RealSense D455")
@@ -1037,15 +805,12 @@ def main():
     async_queue = None
 
     try:
-        # 1. Initialize RealSense Camera
         print("\n[1/5] Initializing RealSense D455...")
         rs_cam = RealSenseCamera(fps=30)
 
-        # 2. Initialize MediaPipe BBox Detector
         print("[2/5] Initializing MediaPipe BBox Detector...")
         bbox_detector = MediaPipeBBoxDetector()
 
-        # 3. Initialize HaMeR
         print("[3/5] Initializing HaMeR Inference Engine (GPU Only)...")
         try:
             hamer_engine = HaMeRInferenceEngine(device='cuda', use_fp16=True)
@@ -1054,7 +819,6 @@ def main():
         except Exception as e:
             raise RuntimeError(f"FATAL: HaMeR initialization failed. GPU Required. Error: {e}")
 
-        # 4. Initialize HybridHandPoseEstimator
         print("[4/5] Initializing Hybrid Hand Pose Estimator...")
         estimator = HybridHandPoseEstimator(
             bbox_detector=bbox_detector,
@@ -1064,7 +828,6 @@ def main():
             async_queue=async_queue
         )
 
-        # 5. Initialize Filters and Detectors
         print("[5/5] Initializing Filters and Pinch Detector...")
         t0 = time.time()
         filter_pos = OneEuroFilter(t0, np.zeros(3), min_cutoff=0.5, beta=0.05, d_cutoff=1.0)
@@ -1082,29 +845,24 @@ def main():
 
         frame_count = 0
 
-        # Main Loop
         while True:
             t_start = time.time()
 
             try:
-                # Capture frame
                 color_img, depth_frame, _ = rs_cam.get_frames()
             except RuntimeError as e:
                 print(f"[ERROR] Camera stream failed: {e}")
                 break
 
-            # Convert and flip
             rgb_img = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
             rgb_img = cv2.flip(rgb_img, 1)
             color_img = cv2.flip(color_img, 1)
 
-            # Estimate pose
             pose = estimator.estimate_pose(rgb_img, depth_frame, frame_count)
 
             if pose is not None:
                 t_now = time.time()
 
-                # Apply filters
                 wrist = filter_pos(t_now, pose.position)
                 v_app = filter_app(t_now, pose.approach)
                 v_norm = filter_norm(t_now, pose.normal)
@@ -1114,24 +872,19 @@ def main():
                 draw_hand_mesh(color_img, pose.vertices, pose.faces, rs_cam.intrinsics)
                 draw_wrist_frame(color_img, wrist, v_app, v_norm, rs_cam.intrinsics)
 
-                # Update UI with gripper state
                 stats = estimator.get_stats()
                 fps = 1.0 / (time.time() - t_start) if (time.time() - t_start) > 0 else 0
                 draw_ui_overlay(color_img, stats, fps, gripper_state, wrist[2])
 
             else:
-                # No hand detected
                 cv2.putText(color_img, "No Hand Detected", (450, 360),
                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
                 
-                # Still show FPS if running
                 fps = 1.0 / (time.time() - t_start) if (time.time() - t_start) > 0 else 0
                 cv2.putText(color_img, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-            # Show image
             cv2.imshow("DexTel - HaMeR Hybrid Hand Tracking", color_img)
 
-            # Keyboard controls
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 print("\n[INFO] Quit requested by user.")
@@ -1150,7 +903,6 @@ def main():
         traceback.print_exc()
 
     finally:
-        # Cleanup
         print("\n[INFO] Cleaning up...")
         if async_queue is not None:
             async_queue.stop()
