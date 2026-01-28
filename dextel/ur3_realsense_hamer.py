@@ -264,8 +264,8 @@ class HaMeRInferenceEngine:
             else:
                 print("[INFO] HaMeR model loaded with FP32 precision.")
 
-            self.mean = torch.tensor(DEFAULT_MEAN, device=self.device).view(3, 1, 1)
-            self.std = torch.tensor(DEFAULT_STD, device=self.device).view(3, 1, 1)
+            self.mean = torch.tensor(DEFAULT_MEAN, device=self.device).view(3, 1, 1).float()
+            self.std = torch.tensor(DEFAULT_STD, device=self.device).view(3, 1, 1).float()
 
             if self.use_fp16:
                 self.mean = self.mean.half()
@@ -279,10 +279,17 @@ class HaMeRInferenceEngine:
 
     def _preprocess(self, image_crop: np.ndarray) -> torch.Tensor:
         img_resized = cv2.resize(image_crop, (256, 256), interpolation=cv2.INTER_LINEAR)
+        # Convert to tensor and normalize to [0, 1]
         img_tensor = torch.from_numpy(img_resized).float() / 255.0
+        img_tensor = img_tensor.to(self.device)
 
+        # HWC -> CHW
         img_tensor = img_tensor.permute(2, 0, 1)
-        img_tensor = (img_tensor - self.mean) / self.std    
+
+        # Normalize with ImageNet statistics
+        img_tensor = (img_tensor - self.mean) / self.std
+
+        # Add batch dimension
         img_tensor = img_tensor.unsqueeze(0)
 
         if self.use_fp16:
@@ -340,6 +347,7 @@ class AsyncInferenceQueue:
             try:
                 frame_crop, metadata = self.input_queue.get(timeout=1.0)
 
+                # Run inference
                 try:
                     result = self.inference_fn(frame_crop)
 
@@ -472,8 +480,8 @@ class RobustFrameEstimator:
             approach_dot = np.dot(v_approach, self.prev_approach)
 
             if normal_dot < 0.7 or approach_dot < 0.7:
-                print("[WARN] Orientation flip detected, using previous frame")
-                return None, None, None
+                # print(f"[WARN] Orientation flip detected (dot={normal_dot:.2f}), allowing update")
+                pass
 
         self.prev_normal = v_normal.copy()
         self.prev_approach = v_approach.copy()
@@ -643,7 +651,7 @@ class HybridHandPoseEstimator:
 
         if self.hamer_submit_counter % self.hamer_interval == 0:
             x, y, w_box, h_box = bbox
-            crop = image_rgb[y:y+h_box, x:x+w_box]
+            crop = image_rgb[y:y+h_box, x:x+w_box].copy()
             self.async_queue.submit(crop, frame_id)
             self.stats["hamer_submit_rate"] = 30.0 / self.hamer_interval
 
@@ -799,9 +807,9 @@ def main():
 
         print("[3/5] Initializing HaMeR Inference Engine (GPU Only)...")
         try:
-            hamer_engine = HaMeRInferenceEngine(device='cuda', use_fp16=True)
+            hamer_engine = HaMeRInferenceEngine(device='cuda', use_fp16=False)
             async_queue = AsyncInferenceQueue(hamer_engine.infer, max_queue_size=2)
-            print("[INFO] HaMeR mode ENABLED (RTX 5090 FP16)")
+            print("[INFO] HaMeR mode ENABLED (RTX 5090 FP32)")
         except Exception as e:
             raise RuntimeError(f"FATAL: HaMeR initialization failed. GPU Required. Error: {e}")
 
@@ -854,8 +862,8 @@ def main():
                 v_norm = filter_norm(t_now, pose.normal)
 
                 gripper_state = pinch_detector.detect(pose.joints_3d)
-
-                draw_hand_mesh(color_img, pose.vertices, pose.faces, rs_cam.intrinsics)
+                # Draw
+                # draw_hand_mesh(color_img, pose.vertices, pose.faces, rs_cam.intrinsics)  <-- DISABLED
                 draw_wrist_frame(color_img, wrist, v_app, v_norm, rs_cam.intrinsics)
 
                 stats = estimator.get_stats()
