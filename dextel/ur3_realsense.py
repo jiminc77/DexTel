@@ -184,32 +184,81 @@ class DeXHandDetector:
         return np.array(points_3d)
 
     @staticmethod
+    # def estimate_wrist_frame(points_3d):
+    #     if points_3d is None or points_3d.shape[0] < 21: return None, None, None
+        
+    #     wrist = points_3d[0]
+    #     index_mcp = points_3d[5]
+    #     pinky_mcp = points_3d[17]
+        
+    #     if np.isnan(wrist).any() or np.isnan(index_mcp).any() or np.isnan(pinky_mcp).any():
+    #         return None, None, None
+        
+    #     v_approach = index_mcp - wrist
+    #     v_approach_norm = np.linalg.norm(v_approach)
+    #     if v_approach_norm > 1e-6:
+    #         v_approach /= v_approach_norm
+    #     else:
+    #         v_approach = np.array([0., 0., 1.])
+
+    #     v_palm_span = pinky_mcp - index_mcp
+    #     v_normal = np.cross(v_approach, v_palm_span)
+    #     v_normal_norm = np.linalg.norm(v_normal)
+
+    #     if v_normal_norm > 1e-6:
+    #         v_normal /= v_normal_norm
+    #     else:
+    #         v_normal = np.array([0., 1., 0.])
+            
+    #     return wrist, v_approach, v_normal
+
+    @staticmethod
     def estimate_wrist_frame(points_3d):
-        if points_3d is None or points_3d.shape[0] < 21: return None, None, None
-        
-        wrist = points_3d[0]
-        index_mcp = points_3d[5]
-        pinky_mcp = points_3d[17]
-        
-        if np.isnan(wrist).any() or np.isnan(index_mcp).any() or np.isnan(pinky_mcp).any():
+        if points_3d is None or points_3d.shape[0] < 21: 
             return None, None, None
+
+        palm_indices = [0, 5, 9, 13, 17] 
+        palm_points = points_3d[palm_indices]
+
+        if np.isnan(palm_points).any():
+            return None, None, None
+
+        centroid = np.mean(palm_points, axis=0)
+
+        centered_points = palm_points - centroid
         
-        v_approach = index_mcp - wrist
+        try:
+            u, s, vt = np.linalg.svd(centered_points)
+        except np.linalg.LinAlgError:
+            return None, None, None
+
+        normal_vec = vt[-1]
+
+        wrist = points_3d[0]
+        middle_mcp = points_3d[9]
+        vec_wrist_to_middle = middle_mcp - wrist
+        
+        ref_vec = np.cross(points_3d[5] - wrist, points_3d[17] - wrist)
+        
+        if np.dot(normal_vec, ref_vec) < 0:
+            normal_vec = -normal_vec
+
+        norm = np.linalg.norm(normal_vec)
+        if norm > 1e-6:
+            v_normal = normal_vec / norm
+        else:
+            v_normal = np.array([0., 1., 0.])
+
+        v_approach = points_3d[9] - points_3d[0]
         v_approach_norm = np.linalg.norm(v_approach)
         if v_approach_norm > 1e-6:
             v_approach /= v_approach_norm
         else:
             v_approach = np.array([0., 0., 1.])
 
-        v_palm_span = pinky_mcp - index_mcp
-        v_normal = np.cross(v_approach, v_palm_span)
-        v_normal_norm = np.linalg.norm(v_normal)
+        v_approach = v_approach - np.dot(v_approach, v_normal) * v_normal
+        v_approach = v_approach / np.linalg.norm(v_approach)
 
-        if v_normal_norm > 1e-6:
-            v_normal /= v_normal_norm
-        else:
-            v_normal = np.array([0., 1., 0.])
-            
         return wrist, v_approach, v_normal
 
     @staticmethod
