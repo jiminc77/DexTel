@@ -68,7 +68,6 @@ class OneEuroFilter:
 
 
 class RealSenseCamera:
-    """RealSense D455 camera interface with depth filtering."""
     def __init__(self, width=1280, height=720, fps=30):
         self.pipeline = rs.pipeline()
         self.config = rs.config()
@@ -108,11 +107,9 @@ class RealSenseCamera:
 
         print("[INFO] RealSense initialized successfully.")
 
-        # Quality metrics tracking
         self.last_depth_quality = {"valid_pixels": 0, "total_pixels": 0, "median_depth": 0.0}
 
     def get_frames(self):
-        """Capture and filter RGB-D frames."""
         try:
             frames = self.pipeline.wait_for_frames(timeout_ms=5000)
         except RuntimeError as e:
@@ -126,7 +123,6 @@ class RealSenseCamera:
         if not depth_frame or not color_frame:
             raise RuntimeError("Received incomplete frames (missing depth or color).")
 
-        # Apply filtering
         filtered_depth = self.spatial.process(depth_frame)
         filtered_depth = self.temporal.process(filtered_depth)
         filtered_depth = filtered_depth.as_depth_frame()
@@ -191,12 +187,11 @@ class MediaPipeBBoxDetector:
             max_num_hands=1,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
-            model_complexity=0  # Fastest model for BBox detection
+            model_complexity=0
         )
 
-        # Temporal smoothing
         self.prev_bbox = None
-        self.bbox_alpha = 0.7  # Exponential moving average weight
+        self.bbox_alpha = 0.7
 
     def detect_bbox(self, image_rgb) -> Optional[Tuple[list, float, Any]]:
         h, w, _ = image_rgb.shape
@@ -206,7 +201,6 @@ class MediaPipeBBoxDetector:
             self.prev_bbox = None
             return None
 
-        # Use first detected hand
         landmarks = results.multi_hand_landmarks[0]
         h, w, _ = image_rgb.shape
         results = self.hand_detector.process(image_rgb)
@@ -215,28 +209,23 @@ class MediaPipeBBoxDetector:
             self.prev_bbox = None
             return None
 
-        # Use first detected hand
         landmarks = results.multi_hand_landmarks[0]
         confidence = results.multi_handedness[0].classification[0].score
 
-        # Compute bounding box from landmarks
         x_coords = [lm.x * w for lm in landmarks.landmark]
         y_coords = [lm.y * h for lm in landmarks.landmark]
 
         x_min, x_max = min(x_coords), max(x_coords)
         y_min, y_max = min(y_coords), max(y_coords)
 
-        # Adaptive padding (50% of box size)
         box_w = x_max - x_min
         box_h = y_max - y_min
         box_size = max(box_w, box_h)
         padding = int(box_size * 0.5)
 
-        # Center and expand
         cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
         half_s = (box_size + padding) / 2
 
-        # Clip to image boundaries
         x = max(0, int(cx - half_s))
         y = max(0, int(cy - half_s))
         x2 = min(w, int(cx + half_s))
@@ -244,7 +233,6 @@ class MediaPipeBBoxDetector:
 
         bbox = [x, y, x2 - x, y2 - y]
 
-        # Temporal smoothing
         if self.prev_bbox is not None:
             bbox = [
                 int(self.bbox_alpha * bbox[i] + (1 - self.bbox_alpha) * self.prev_bbox[i])
@@ -283,7 +271,6 @@ class HaMeRInferenceEngine:
                 self.mean = self.mean.half()
                 self.std = self.std.half()
 
-            # Cache MANO faces
             self.faces = self.model.mano.faces.astype(np.int32)
             print("[INFO] HaMeR initialized successfully.")
 
@@ -428,7 +415,7 @@ class RobustFrameEstimator:
 
         if std_dist > 0:
             valid_mask = distances < (np.mean(distances) + 2 * std_dist)
-            if np.sum(valid_mask) >= 3:  # Need at least 3 points for SVD
+            if np.sum(valid_mask) >= 3:
                 palm_points_filtered = palm_points[valid_mask]
                 centroid = np.mean(palm_points_filtered, axis=0)
                 centered_points = palm_points_filtered - centroid
@@ -587,7 +574,6 @@ class HybridHandPoseEstimator:
         hamer_vertices: np.ndarray,
         wrist_depth_rs: float
     ) -> Tuple[np.ndarray, np.ndarray]:
-        # Scale estimation
         hamer_hand_size = np.linalg.norm(hamer_joints[9] - hamer_joints[0])
 
         if hamer_hand_size < 1e-6:
