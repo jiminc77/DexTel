@@ -96,6 +96,7 @@ class RealSenseCamera:
 
         filtered_depth = self.spatial.process(depth_frame)
         filtered_depth = self.temporal.process(filtered_depth)
+        filtered_depth = filtered_depth.as_depth_frame()
         
         color_image = np.asanyarray(color_frame.get_data())
         return color_image, filtered_depth, color_frame
@@ -253,7 +254,7 @@ def main():
                 if wrist is not None:
                     current_time = time.time()
                     if filter_3d is None:
-                        filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=0.1, beta=1.0, d_cutoff=1.0)
+                        filter_3d = OneEuroFilter(current_time, points_3d, min_cutoff=1.0, beta=10.0, d_cutoff=1.0)
                     
                     points_3d_filtered = filter_3d(current_time, points_3d)
                     
@@ -285,13 +286,13 @@ def main():
                             if -1000 < px < 3000 and -1000 < py < 3000:
                                 cv2.arrowedLine(color_image, wrist_px, (px, py), (0, 255, 0), 3)
                         cv2.putText(color_image, f"Wrist Z: {wrist[2]:.3f}m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                        cv2.putText(color_image, f"Pinch: {pinch_dist*1000:.1f}mm", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.putText(color_image, f"Pinch: {pinch_dist*1000:.1f}mm", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     else:
                          cv2.putText(color_image, "Filtering Unstable", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
                 else:
                     cv2.putText(color_image, "Depth Invalid for Keypoints", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-            cv2.putText(color_image, f"FPS: {rs_cam.profile.get_stream(rs.stream.color).fps}", (10, 700), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.putText(color_image, f"FPS: {rs_cam.profile.get_stream(rs.stream.color).fps()}", (10, 700), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             cv2.imshow("Realsense D455 Hand Tracking", color_image)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
