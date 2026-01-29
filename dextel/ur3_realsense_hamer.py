@@ -145,10 +145,12 @@ class RobustTracker:
             return None
             
         # [FILTERING] Strict LEFT HAND Only
-        # Mirror Logic: Real Left Hand -> Image Left Side -> MP Label "Right"
+        # User Feedback: "Right" label detected Right Hand.
+        # Thus: We must target "Left" Label for Left Hand.
         
         target_idx = -1
         best_score = -1
+        detected_label = "None"
         
         for i, handedness in enumerate(results.multi_handedness):
             score = handedness.classification[0].score
@@ -157,20 +159,21 @@ class RobustTracker:
             # Check Spatial Position
             lm = results.multi_hand_landmarks[i]
             x_wrist = lm.landmark[0].x 
-            is_left_side = x_wrist < 0.6 # Left side of screen (Physical Left)
+            is_left_side = x_wrist < 0.6 
             
-            # Primary: Label "Right" (Physical Left)
-            if label == "Right":
+            # Primary: Label "Left"
+            if label == "Left":
                 if score > best_score:
                     best_score = score
                     target_idx = i
+                    detected_label = f"Left({score:.2f})"
             
             # Secondary: If no label match, check spatial
             elif target_idx == -1 and is_left_side:
                  target_idx = i
+                 detected_label = f"Spatial({label})"
         
         if target_idx == -1:
-            # Fallback: Track closest to previous
             if self.prev_box is not None:
                 min_dist = float('inf')
                 prev_cx = self.prev_box[0] / w
@@ -183,6 +186,7 @@ class RobustTracker:
                     if dist < min_dist:
                         min_dist = dist
                         target_idx = i
+                if target_idx != -1: detected_label = "Tracking"
             else:
                 return None 
 
@@ -217,9 +221,9 @@ class RobustTracker:
         w_box = min(w - x, s)
         h_box = min(h - y, s)
         
-        return [x, y, w_box, h_box], lm 
+        return [x, y, w_box, h_box], lm, detected_label
 
-    def estimate_rigid_orientation(self, joints_3d):
+    def estimate_rigid_orientation(self, joints_3d, is_left_hand=True):
         """
         Computes a stable orientation frame using the 'Rigid Triangle' of the hand.
         Origin: Wrist (0)
@@ -239,7 +243,33 @@ class RobustTracker:
         v2 /= np.linalg.norm(v2)
         
         # 3. Normal Vector (Up/Down) - Z axis
+        # RH Rule: Index x Pinky -> Palm Normal (Down/In)
+        # For Left Hand: Mirror Image ensures Index/Pinky relative pos is swapped.
+        # But we FLIPPED the X-coords to make it "Right Hand-like" for HaMeR?
+        # WAIT. We un-flipped them: pred_joints[:, 0] *= -1.
+        # So joints_3d is in TRUE LEFT HAND coordinates.
+        # LEFT HAND: Index is Right, Pinky is Left (palm down).
+        # V1=(1,0,0). V2=(-1,0,0). Cross is 0. 
+        # Need Y component. Index is forward-right. Pinky is forward-left.
+        # V1 = (1, 1, 0). V2 = (-1, 1, 0).
+        # Cross(V1, V2) = (0, 0, 1+1) = (0,0,2) = +Z (Up).
+        
+        # Right Hand Palm Down: Index(Left), Pinky(Right).
+        # V1 = (-1, 1, 0). V2 = (1, 1, 0).
+        # Cross(V1, V2) = (0, 0, -1-1) = -Z (Down).
+        
+        # So Z direction FLIPS between Hands.
+        # We want Z to be consistent (e.g. Normal out of Back of Hand).
+        # Up (+Z) is Back of Hand.
+        
         z_vec = np.cross(v1, v2)
+        if not is_left_hand: # Right Hand
+             # Cross(Index, Pinky) for RH points DOWN.
+             # We want UP (Back of Hand). So Flip.
+             z_vec = -z_vec
+        
+        # For Left Hand: Cross points UP. Correct.
+        
         norm_z = np.linalg.norm(z_vec)
         if norm_z < 1e-6: return np.eye(3)
         z_vec /= norm_z
@@ -293,7 +323,7 @@ class RobustTracker:
             # cv2.putText(img_bgr, "Searching Left Hand...", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             return img_bgr, None
 
-        bbox, mp_lm = box_data
+        bbox, mp_lm, detected_label = box_data
         x, y, w_box, h_box = bbox
         
         # 2. HaMeR Inference
@@ -343,7 +373,7 @@ class RobustTracker:
             joints_centered = pred_joints - wrist_local
             
             # 4. Orientation
-            R = self.estimate_rigid_orientation(joints_centered)
+            R = self.estimate_rigid_orientation(joints_centered, is_left_hand=True)
             
             if self.filter_rot is None:
                 self.filter_rot = OneEuroFilter(R, t_now, min_cutoff=0.5, beta=0.05)
@@ -371,6 +401,9 @@ class RobustTracker:
             # --- Visualization ---
             draw_hand_mesh(img_bgr, pred_verts, self.faces, self.intrinsics, x, y, w_box, h_box)
             draw_wrist_frame(img_bgr, wrist_px_x, wrist_px_y, R_smooth)
+            
+            # Debug Box Label
+            # cv2.putText(img_bgr, detected_label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
             state = HandState(
                 position=pos_smooth,
@@ -413,8 +446,7 @@ def draw_wrist_frame(image, u, v, R, axis_len=60):
     # We assume 'y' in 3D is roughly 'y' on screen for visualization sake
     # (Not perfect but clear enough for orientation check)
     
-    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)] # BGR: Red, Blue, Green
-    labels = ['X', 'Y', 'Z']
+    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)] # BGR: Red, Blue, Green for X, Y, Z
     
     for i in range(3):
         # Project 3D vector to 2D
@@ -449,10 +481,10 @@ def draw_ui_overlay(image, state: HandState, fps: float):
     font = cv2.FONT_HERSHEY_DUPLEX
     
     # Logo / Title
-    cv2.putText(image, "DexTel", (20, 40), font, 1.0, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(image, "DexTel [LEFT HAND]", (20, 40), font, 1.0, (255, 255, 255), 1, cv2.LINE_AA)
     
     # FPS
-    cv2.putText(image, f"{fps:.0f} FPS", (160, 40), font, 0.6, (150, 150, 150), 1, cv2.LINE_AA)
+    cv2.putText(image, f"{fps:.0f} FPS", (280, 40), font, 0.6, (150, 150, 150), 1, cv2.LINE_AA)
     
     # Gripper Status Indicator (Pill Shape)
     status_txt = "GRIPPED" if state.is_pinched else "RELEASED"
