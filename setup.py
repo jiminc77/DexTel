@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ur3_realsense_hamer = dextel.ur3_realsense_hamer:main',
+            'dextel_node = dextel.dextel_node:main',
         ],
     },
 )
