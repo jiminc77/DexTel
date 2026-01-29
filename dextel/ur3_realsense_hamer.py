@@ -13,8 +13,8 @@ from hamer.models import load_hamer, DEFAULT_CHECKPOINT
 warnings.filterwarnings("ignore")
 
 HAMER_CONFIDENCE_THRESH = 0.5
-PINCH_CLOSE_THRESH = 0.08
-PINCH_OPEN_THRESH = 0.12
+PINCH_CLOSE_THRESH = 0.05
+PINCH_OPEN_THRESH = 0.10
 WRIST_FRAME_SMOOTH_ALPHA = 0.6
 
 @dataclass
@@ -89,8 +89,8 @@ class RobustTracker:
     def init_realsense(self):
         self.pipeline = rs.pipeline()
         config = rs.config()
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+        config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
         
         profile = self.pipeline.start(config)
         stream = profile.get_stream(rs.stream.depth)
@@ -127,12 +127,9 @@ class RobustTracker:
             
         target_idx = -1
         
-        # Strict Filtering: Physical LEFT HAND Only
-        # Mirror Logic: Real Left Hand -> Image Right Side -> MP Label "Right"
         for i, handedness in enumerate(results.multi_handedness):
             label = handedness.classification[0].label
             
-            # Primary: Label "Right" (Physical Left)
             if label == "Right":
                 target_idx = i
                 break
