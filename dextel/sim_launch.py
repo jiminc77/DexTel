@@ -1,4 +1,5 @@
 import os
+import isaacsim # REQUIRED for pip-installed Isaac Sim 5.0+
 from omni.isaac.kit import SimulationApp
 simulation_app = SimulationApp({"headless": False})
 
