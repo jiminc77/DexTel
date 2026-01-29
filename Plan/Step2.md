@@ -1,9 +1,3 @@
-# Week 1: Vision & Retargeting Implementation (UR3 Optimized)
-
-## Workflow Overview
-
-This week focuses on building the "Brain" of the teleoperation system: the Vision Pipeline and the Retargeting Engine. By the end of this week, you should be able to move your hand and see consistent, smooth joint angle values ($q_1 \dots q_6$) being published to ROS 2.
-
 ### Prerequisites (From Step 1/Env Setup)
 - Ubuntu 24.04
 - ROS 2 Jazzy Installed
@@ -12,98 +6,73 @@ This week focuses on building the "Brain" of the teleoperation system: the Visio
 
 ---
 
-## Day 3: MediaPipe & Signal Processing Setup
+## Vision Teleoperation System (RealSense + HaMeR)
 
-### 1. Dependencies Installation
+**MediaPipe** for fast 2D ROI detection and **HaMeR (Hand Mesh Recovery)** for accurate 3D pose estimation, fused with **RealSense** depth data.
 
-We will use `mediapipe` for vision and `dex-retargeting` for the optimization logic.
+### 1. Virtual Environment Setup & Dependencies Installation
 
-```bash
-conda activate isaac
-
-# Install MediaPipe and core math libs
-pip install mediapipe opencv-python numpy scipy
-
-# Install Optimization Solver (NLopt)
-sudo apt install libnlopt-dev
-pip install nlopt
-
-# Install Dex-Retargeting (Clone to modify/inspect if needed, or use as reference)
-cd ~/workspace/H1_Project/ai_libs
-git clone https://github.com/dexsuite/dex-retargeting.git
-pip install -e dex-retargeting
-```
-
-### 2. Vision Node Implementation (`ur3_vision.py`)
-
-Create a basic script to extract robust hand vectors.
-
-**Key Goals**:
-- Extract 21 landmarks.
-- Compute **Wrist Position**.
-- Compute **Palm Normal Vector** (Cross product of Index-MCP and Pinky-MCP vectors).
-- Compute **Approach Vector** (Wrist to Index-MCP).
-
-```python
-# Pseudo-code logic for ur3_vision.py
-import mediapipe as mp
-import numpy as np
-
-# 1. Initialize MediaPipe
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(
-    max_num_hands=1,
-    model_complexity=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.7
-)
-
-# 2. Vector Extraction Logic
-def get_hand_vectors(landmarks):
-    # Convert landmarks to numpy array (21, 3)
-    kps = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+- Environment Setup
     
-    wrist = kps[0]
-    index_mcp = kps[5]
-    pinky_mcp = kps[17]
+    ```bash
+    sudo apt install python3-venv
     
-    # Vector 1: Approach (Wrist -> Index Knuckle) - Main pointing direction
-    v_approach = (index_mcp - wrist) / np.linalg.norm(index_mcp - wrist)
+    python3 -m venv --system-site-packages venv
     
-    # Vector 2: Palm Plane (Index Knuckle -> Pinky Knuckle)
-    v_palm_span = (pinky_mcp - index_mcp)
+    # Activate the virtual enviromnemt
+    source venv/bin/activate
     
-    # Vector 3: Normal (Cross Product) - Orientation of the palm
-    v_normal = np.cross(v_approach, v_palm_span)
-    v_normal /= np.linalg.norm(v_normal)
+    # Install Core Dependencies
+    pip3 install torch torchvision mediapipe==0.10.14 pyrealsense2 opencv-python numpy==1.26.4
+    ```
     
-    return wrist, v_approach, v_normal
-
-# 3. Pinch Detection Logic
-def get_pinch_distance(landmarks):
-    thumb_tip = np.array([landmarks[4].x, landmarks[4].y, landmarks[4].z])
-    index_tip = np.array([landmarks[8].x, landmarks[8].y, landmarks[8].z])
+- Install HaMeR
     
-    return np.linalg.norm(thumb_tip - index_tip)
-```
+    ```bash
+    cd ~/ros2_ws/src/dextel
+    
+    # Clone HaMeR repository
+    git clone https://github.com/geopavlakos/hamer.git
+    
+    # Install HaMeR
+    cd hamer
+    pip3 install -e .
+    pip3 install webdataset hydra-core pyrootutils rich smplx==0.1.28 chumpy
+    ```
+    
+- Download Model Data
+    
+    ```bash
+    cd ~/workspace/ros2_ws/src/dextel/hamer
+    
+    # 1. Download HaMeR Demo Data (Checkpoints)
+    wget https://www.cs.utexas.edu/~pavlakos/hamer/data/hamer_demo_data.tar.gz
+    tar -xvf hamer_demo_data.tar.gz
+    # 2. Download MANO Hand Model
+    mkdir -p _DATA/data/mano
+    wget -O _DATA/data/mano/MANO_RIGHT.pkl https://huggingface.co/camenduru/HandRefiner/resolve/main/MANO_RIGHT.pkl
+    
+    cd ~/workspace/ros2_ws/src/dextel/dextel
+    # Create a symbolic link to the data
+    ln -s ../hamer/_DATA _DATA
+    ```
 
-### 3. Jitter Reduction (Low Pass Filter)
+### 2. Vision Node Implementation (`ur3_realsense_hamer.py`)
 
-Implement `OneEuroFilter` to stabilize the raw input. This is critical for preventing the robot from shaking.
+The `RobustTracker` class integrates the following components:
 
-```python
-class OneEuroFilter:
-    def __init__(self, min_cutoff=1.0, beta=0.0):
-        # min_cutoff: Min frequency (lower = smoother, more lag)
-        # beta: Speed coefficient (higher = less lag during fast movement)
-        self.min_cutoff = min_cutoff
-        self.beta = beta
-        # ... Implementation ...
-```
+1.  **Sensor Input**: RealSense D455 RGB-D stream (Aligned).
+2.  **ROI Detection**: MediaPipe Hands detects the hand to create a stable bounding box.
+3.  **3D Inference**: The **HaMeR** transformer model predicts dense 3D mesh and joint locations from the cropped image.
+4.  **Signal Processing**:
+    -   **Depth Fusion**: The wrist's true 3D position is determined by sampling the RealSense depth map at the wrist pixel and deprojecting it.
+    -   **Smoothing**: `OneEuroFilter` is applied to both the 3D position and the 3D rotation matrix to minimize jitter.
+5.  **Logic**:
+    -   **Coordinate Frame**: A robust wrist frame is calculated using the Wrist, Index-MCP, and Pinky-MCP joints.
+    -   **Pinch Detection**: A Schmitt Trigger (Hysteresis) monitors the Thumb-Index distance for gripper control (Close < 5cm, Open > 10cm).
 
----
 
-## Day 4: Dex-Retargeting Implementation (The Core)
+## Dex-Retargeting Implementation
 
 This is the most critical step. We will adapt the `VectorOptimizer` from `dex-retargeting` to solve for UR3 joint angles.
 
