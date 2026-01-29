@@ -282,8 +282,8 @@ class RobustTracker:
             # Preprocess (FP32)
             _inp = cv2.resize(crop_input, (256, 256))
             _inp = torch.from_numpy(_inp).float().to(self.device) / 255.0
+            _inp = _inp.permute(2, 0, 1).unsqueeze(0) # [H, W, C] -> [1, C, H, W]
             _inp = (_inp - self.mean) / self.std
-            _inp = _inp.permute(2, 0, 1).unsqueeze(0)
             
             with torch.no_grad():
                 out = self.model({'img': _inp})
