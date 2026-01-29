@@ -115,7 +115,7 @@ class RobustTracker:
         img = np.asanyarray(color_frame.get_data())
         depth = np.asanyarray(filtered_depth.get_data())
         
-        return img, depth, filtered_depth
+        return img, depth, filtered_depth.as_depth_frame()
 
     def get_mediapipe_box(self, img_rgb):
         h, w = img_rgb.shape[:2]
