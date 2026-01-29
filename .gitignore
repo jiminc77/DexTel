@@ -9,3 +9,4 @@ __pycache__/
 ros2_ws/
 venv/
 __pycache__/
+etc/
