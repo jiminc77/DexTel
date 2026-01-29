@@ -76,9 +76,9 @@ class RobustTracker:
         # 2. Initialize MediaPipe (BBox Only)
         self.mp_hands = mp.solutions.hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
-            model_complexity=0, # Fast
-            min_detection_confidence=0.5,
+            max_num_hands=2,
+            model_complexity=1, # Higher accuracy
+            min_detection_confidence=0.4,
             min_tracking_confidence=0.5
         )
         
@@ -144,22 +144,54 @@ class RobustTracker:
             self.prev_box = None
             return None
             
-        # [FILTERING] Strict Right Hand Only
-        # Mirror Logic: Real Right Hand -> Image Flipped -> Looks like Left Hand -> MP Label "Left"
+        # [FILTERING] Robust Right Hand Selection
+        # Mirror Mode: Real Right Hand -> Image Right Side -> MP Label "Left"
+        
         target_idx = -1
+        best_score = -1
+        
+        # Strategy:
+        # 1. Look for Hand "Left" (Mirrored Right) with highest score.
+        # 2. Fallback: Any hand on the Right Side of screen (x > 0.5).
         
         for i, handedness in enumerate(results.multi_handedness):
             score = handedness.classification[0].score
             label = handedness.classification[0].label
             
-            # Require high confidence "Left" (which is Mirrored Right)
-            if label == "Left" and score > 0.8: 
-                target_idx = i
-                break
+            # Check Spatial Position of this hand
+            lm = results.multi_hand_landmarks[i]
+            x_wrist = lm.landmark[0].x # Wrist X
+            is_right_side = x_wrist > 0.4 # Slightly lenient center
+            
+            # Primary: Label "Left" AND is on Right Side
+            if label == "Left":
+                if score > best_score:
+                    best_score = score
+                    target_idx = i
+            
+            # Secondary: If we haven't found a "Left" label yet, checks spatial
+            elif target_idx == -1 and is_right_side:
+                 target_idx = i # Provisional candidate
         
         if target_idx == -1:
-            self.prev_box = None
-            return None 
+            # Last ditch: Visual tracking (use previous box location if close)
+            if self.prev_box is not None:
+                # Find hand closest to prev_box center
+                min_dist = float('inf')
+                prev_cx = self.prev_box[0] / w
+                prev_cy = self.prev_box[1] / h
+                
+                for i, lm in enumerate(results.multi_hand_landmarks):
+                    cx = lm.landmark[9].x
+                    cy = lm.landmark[9].y
+                    dist = (cx - prev_cx)**2 + (cy - prev_cy)**2
+                    if dist < min_dist:
+                        min_dist = dist
+                        target_idx = i
+            else:
+                return None 
+
+        if target_idx == -1: return None
 
         lm = results.multi_hand_landmarks[target_idx]
         
