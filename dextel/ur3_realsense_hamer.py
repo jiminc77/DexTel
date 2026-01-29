@@ -144,39 +144,34 @@ class RobustTracker:
             self.prev_box = None
             return None
             
-        # [FILTERING] Robust Right Hand Selection
-        # Mirror Mode: Real Right Hand -> Image Right Side -> MP Label "Left"
+        # [FILTERING] Strict LEFT HAND Only
+        # Mirror Logic: Real Left Hand -> Image Left Side -> MP Label "Right"
         
         target_idx = -1
         best_score = -1
-        
-        # Strategy:
-        # 1. Look for Hand "Left" (Mirrored Right) with highest score.
-        # 2. Fallback: Any hand on the Right Side of screen (x > 0.5).
         
         for i, handedness in enumerate(results.multi_handedness):
             score = handedness.classification[0].score
             label = handedness.classification[0].label
             
-            # Check Spatial Position of this hand
+            # Check Spatial Position
             lm = results.multi_hand_landmarks[i]
-            x_wrist = lm.landmark[0].x # Wrist X
-            is_right_side = x_wrist > 0.4 # Slightly lenient center
+            x_wrist = lm.landmark[0].x 
+            is_left_side = x_wrist < 0.6 # Left side of screen (Physical Left)
             
-            # Primary: Label "Left" AND is on Right Side
-            if label == "Left":
+            # Primary: Label "Right" (Physical Left)
+            if label == "Right":
                 if score > best_score:
                     best_score = score
                     target_idx = i
             
-            # Secondary: If we haven't found a "Left" label yet, checks spatial
-            elif target_idx == -1 and is_right_side:
-                 target_idx = i # Provisional candidate
+            # Secondary: If no label match, check spatial
+            elif target_idx == -1 and is_left_side:
+                 target_idx = i
         
         if target_idx == -1:
-            # Last ditch: Visual tracking (use previous box location if close)
+            # Fallback: Track closest to previous
             if self.prev_box is not None:
-                # Find hand closest to prev_box center
                 min_dist = float('inf')
                 prev_cx = self.prev_box[0] / w
                 prev_cy = self.prev_box[1] / h
@@ -295,7 +290,7 @@ class RobustTracker:
         
         if not box_data:
             # Minimal "Searching" Indicator
-            # cv2.putText(img_bgr, "Searching Right Hand...", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            # cv2.putText(img_bgr, "Searching Left Hand...", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             return img_bgr, None
 
         bbox, mp_lm = box_data
