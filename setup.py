@@ -20,8 +20,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'ur3_realsense = dextel.ur3_realsense:main',
-            'ur3_vision = dextel.ur3_vision:main',
             'ur3_realsense_hamer = dextel.ur3_realsense_hamer:main',
         ],
     },
