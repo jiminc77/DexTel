@@ -10,22 +10,46 @@ from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 import os
 import hamer
-from hamer.models import load_hamer, DEFAULT_CHECKPOINT
+from hamer.models import HAMER, DEFAULT_CHECKPOINT
+from hamer.configs import get_config
 
 warnings.filterwarnings("ignore")
-
-def get_hamer_checkpoint_path():
-    hamer_pkg_path = os.path.dirname(hamer.__file__) 
-    hamer_root = os.path.dirname(hamer_pkg_path)
-    
-    if not os.path.isabs(DEFAULT_CHECKPOINT):
-        return os.path.join(hamer_root, DEFAULT_CHECKPOINT)
-    return DEFAULT_CHECKPOINT
 
 HAMER_CONFIDENCE_THRESH = 0.5
 PINCH_CLOSE_THRESH = 0.05
 PINCH_OPEN_THRESH = 0.10
 WRIST_FRAME_SMOOTH_ALPHA = 0.6
+
+def recursive_fix_paths(cfg_node, root_dir):
+    from yacs.config import CfgNode
+    for k, v in cfg_node.items():
+        if isinstance(v, CfgNode):
+            recursive_fix_paths(v, root_dir)
+        elif isinstance(v, str) and (v.startswith("./_DATA") or v.startswith("_DATA")):
+            clean_v = v.replace("./_DATA", "_DATA")
+            if not os.path.isabs(clean_v):
+                cfg_node[k] = os.path.join(root_dir, clean_v)
+
+def load_hamer_robust():
+    hamer_pkg_path = os.path.dirname(hamer.__file__) 
+    hamer_root = os.path.dirname(hamer_pkg_path)
+    
+    checkpoint_path = DEFAULT_CHECKPOINT
+    if not os.path.isabs(checkpoint_path):
+        checkpoint_path = os.path.join(hamer_root, checkpoint_path)
+        
+    try:
+        model_cfg = get_config(checkpoint_path, update_cachedir=True)
+        
+        recursive_fix_paths(model_cfg, hamer_root)
+        
+        model = HAMER.load_from_checkpoint(checkpoint_path, strict=False, cfg=model_cfg)
+        return model, model_cfg
+        
+    except Exception as e:
+        print(f"[ERR] Robust Load Failed: {e}")
+        from hamer.models import load_hamer
+        return load_hamer(DEFAULT_CHECKPOINT)
 
 @dataclass
 class HandState:
@@ -84,7 +108,7 @@ class RobustTracker:
         )
         
         print("[INFO] Loading HaMeR Model...")
-        self.model, self.model_cfg = load_hamer(get_hamer_checkpoint_path())
+        self.model, self.model_cfg = load_hamer_robust()
         self.model = self.model.to(self.device).eval()
         
         self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(3, 1, 1).float()
