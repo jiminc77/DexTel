@@ -17,7 +17,13 @@ class DexTelNode(Node):
         super().__init__('dextel_node')
         
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
-        urdf_path = self.get_parameter('urdf_path').get_parameter_value().string_value
+        param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
+        
+        pkg_dir = os.path.dirname(os.path.abspath(__file__))
+        if not os.path.isabs(param_path):
+            urdf_path = os.path.join(pkg_dir, param_path)
+        else:
+            urdf_path = param_path
         
         self.pub_joints = self.create_publisher(JointState, '/target_joint_states', 10)
         self.pub_gripper = self.create_publisher(Float64, '/gripper_command', 10)

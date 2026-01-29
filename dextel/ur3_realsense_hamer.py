@@ -15,6 +15,9 @@ from hamer.models import load_hamer, DEFAULT_CHECKPOINT
 warnings.filterwarnings("ignore")
 
 HAMER_CONFIDENCE_THRESH = 0.5
+PINCH_CLOSE_THRESH = 0.05
+PINCH_OPEN_THRESH = 0.10
+WRIST_FRAME_SMOOTH_ALPHA = 0.6
 
 @dataclass
 class HandState:
