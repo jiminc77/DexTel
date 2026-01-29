@@ -79,7 +79,6 @@ class RobustTracker:
         
         self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(3, 1, 1).float()
         self.std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(3, 1, 1).float()
-        self.faces = self.model.mano.faces.astype(np.int32)
         
         self.prev_box = None
         self.pinch_state = False
@@ -119,7 +118,8 @@ class RobustTracker:
 
     def get_mediapipe_box(self, img_rgb):
         h, w = img_rgb.shape[:2]
-        results = self.mp_hands.process(img_rgb)
+        img_flipped = cv2.flip(img_rgb, 1)
+        results = self.mp_hands.process(img_flipped)
         
         if not results.multi_hand_landmarks:
             self.prev_box = None
@@ -130,7 +130,7 @@ class RobustTracker:
         for i, handedness in enumerate(results.multi_handedness):
             label = handedness.classification[0].label
             
-            if label == "Right":
+            if label == "Left":
                 target_idx = i
                 break
                 
@@ -139,6 +139,9 @@ class RobustTracker:
             return None 
 
         lm = results.multi_hand_landmarks[target_idx]
+        
+        for pt in lm.landmark:
+            pt.x = 1.0 - pt.x
         
         x_list = [pt.x * w for pt in lm.landmark]
         y_list = [pt.y * h for pt in lm.landmark]
@@ -228,8 +231,6 @@ class RobustTracker:
             with torch.no_grad():
                 out = self.model({'img': _inp})
                 
-            pred_verts = out['pred_vertices'][0].cpu().numpy()
-            pred_cam = out['pred_cam'][0].cpu().numpy()
             pred_joints = out['pred_keypoints_3d'][0].cpu().numpy()
             valid_hamer = True
         except:
@@ -237,7 +238,6 @@ class RobustTracker:
             
         if valid_hamer:
             pred_joints[:, 0] *= -1
-            pred_verts[:, 0] *= -1
             
             wrist_px_x = int(mp_lm.landmark[0].x * w)
             wrist_px_y = int(mp_lm.landmark[0].y * h)
@@ -274,7 +274,6 @@ class RobustTracker:
             else:
                 if pinch_dist < PINCH_CLOSE_THRESH: self.pinch_state = True
                 
-            draw_hand_mesh(img_bgr, pred_verts, self.faces, self.intrinsics, x, y, w_box, h_box)
             draw_wrist_frame(img_bgr, wrist_px_x, wrist_px_y, R_smooth)
 
             state = HandState(
@@ -318,9 +317,6 @@ def draw_wrist_frame(image, u, v, R, axis_len=60):
         cv2.line(image, origin, end_pt, colors[i], 3, cv2.LINE_AA)
     cv2.circle(image, origin, 5, (255, 255, 255), -1)
 
-def draw_hand_mesh(image, vertices, faces, intrinsics, bx, by, bw, bh):
-    cv2.rectangle(image, (bx, by), (bx+bw, by+bh), (255, 255, 255), 1)
-    cv2.putText(image, "LEFT HAND", (bx, by-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
 def draw_ui_overlay(image, state: HandState, fps: float):
     h, w = image.shape[:2]
