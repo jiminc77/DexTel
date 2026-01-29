@@ -92,6 +92,7 @@ class RobustTracker:
         # Stats
         self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(3, 1, 1).float()
         self.std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(3, 1, 1).float()
+        self.faces = self.model.mano.faces.astype(np.int32)
         
         # State
         self.prev_box = None
@@ -340,8 +341,9 @@ class RobustTracker:
             else:
                 if pinch_dist < PINCH_CLOSE_THRESH: self.pinch_state = True
                 
+                
             # --- Visualization ---
-            draw_hand_mesh(img_bgr, pred_verts, out['pred_faces'].cpu().numpy(), self.intrinsics, x, y, w_box, h_box)
+            draw_hand_mesh(img_bgr, pred_verts, self.faces, self.intrinsics, x, y, w_box, h_box)
             draw_wrist_frame(img_bgr, wrist_px_x, wrist_px_y, R_smooth)
 
             state = HandState(
