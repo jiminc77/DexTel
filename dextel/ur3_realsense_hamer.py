@@ -144,32 +144,22 @@ class RobustTracker:
             self.prev_box = None
             return None
             
-        # [FILTER] Right Hand Only
-        # Since image is FLIPPED (Mirror Mode):
-        # - Real Right Hand appears on the Right side of the screen.
-        # - Geometrically, it looks like a Left Hand to MediaPipe.
-        # Logic: Look for handedness "Left" OR bbox on the right half.
-        
+        # [FILTERING] Strict Right Hand Only
+        # Mirror Logic: Real Right Hand -> Image Flipped -> Looks like Left Hand -> MP Label "Left"
         target_idx = -1
         
-        # Priority 1: Check Handedness Label
         for i, handedness in enumerate(results.multi_handedness):
+            score = handedness.classification[0].score
             label = handedness.classification[0].label
-            if label == "Left": # Flipped Right Hand
+            
+            # Require high confidence "Left" (which is Mirrored Right)
+            if label == "Left" and score > 0.8: 
                 target_idx = i
                 break
         
-        # Priority 2: If no "Left" found, pick the one on the right side of screen (center > w/2)
-        if target_idx == -1:
-            for i, lm in enumerate(results.multi_hand_landmarks):
-                cx = lm.landmark[9].x * w # Middle MCP
-                if cx > w * 0.4: # Slightly lenient
-                    target_idx = i
-                    break
-                    
         if target_idx == -1:
             self.prev_box = None
-            return None # No Right Hand found
+            return None 
 
         lm = results.multi_hand_landmarks[target_idx]
         
@@ -181,23 +171,20 @@ class RobustTracker:
         min_y, max_y = min(y_list), max(y_list)
         
         cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
-        box_size = max(max_x - min_x, max_y - min_y) * 1.5 # Scale factor
+        box_size = max(max_x - min_x, max_y - min_y) * 1.5 
         
-        # Temporal Smoothing
         if self.prev_box is not None:
-            alpha = 0.7
+            alpha = 0.6 # Smoother
             cx = self.prev_box[0] * alpha + cx * (1-alpha)
             cy = self.prev_box[1] * alpha + cy * (1-alpha)
             box_size = self.prev_box[2] * alpha + box_size * (1-alpha)
             
         self.prev_box = [cx, cy, box_size]
         
-        # Convert to int rect
         s = int(box_size)
         x = int(cx - s/2)
         y = int(cy - s/2)
         
-        # Square crop padding
         x = max(0, x)
         y = max(0, y)
         w_box = min(w - x, s)
@@ -211,7 +198,6 @@ class RobustTracker:
         Origin: Wrist (0)
         Vec1: Wrist -> Index MCP (5)
         Vec2: Wrist -> Pinky MCP (17)
-        These points are structurally rigid (knuckles), unlike fingertips.
         """
         wrist = joints_3d[0]
         index_mcp = joints_3d[5]
@@ -225,29 +211,43 @@ class RobustTracker:
         v2 = pinky_mcp - wrist
         v2 /= np.linalg.norm(v2)
         
-        # 3. Normal Vector (Up/Down)
+        # 3. Normal Vector (Up/Down) - Z axis
         z_vec = np.cross(v1, v2)
         norm_z = np.linalg.norm(z_vec)
         if norm_z < 1e-6: return np.eye(3)
         z_vec /= norm_z
         
-        # 4. Approach Vector (Forward)
-        x_vec = v1 # Approximate X
-        y_vec = np.cross(z_vec, x_vec)
+        # 4. Approach Vector (Forward) - X axis
+        # Use v1 (Wrist->Index) as rough X, then orthog against Z
+        x_vec_raw = v1 
+        y_vec = np.cross(z_vec, x_vec_raw)
         y_vec /= np.linalg.norm(y_vec)
-        x_vec = np.cross(y_vec, z_vec)
-        x_vec /= np.linalg.norm(x_vec)
+        x_vec = np.cross(y_vec, z_vec) # Precise X
         
-        # Remap for Robot Control (Z=Normal, X=Approach)
+        # Re-Map for Robot End-Effector Convention
+        # We want: 
+        #   Z (Green) = Normal out of back of hand
+        #   X (Red)   = Approach (Wrist -> Fingers)
+        #   Y (Blue)  = Bi-normal (Side)
+        
+        # Currently:
+        #   z_vec = Normal (Back of hand) -> Correct
+        #   x_vec = Wrist->Index (Side-ish) -> We want Forward
+        
+        # Let's derive "Forward" from Middle Finger
         middle_mcp = joints_3d[9]
-        v_approach_raw = middle_mcp - wrist
-        dist = np.dot(v_approach_raw, z_vec)
-        v_approach = v_approach_raw - dist * z_vec
-        v_approach /= (np.linalg.norm(v_approach) + 1e-9)
-        v_binormal = np.cross(z_vec, v_approach)
+        v_forward = middle_mcp - wrist
         
-        # [Approach, BiNormal, Normal]
-        R = np.column_stack((v_approach, v_binormal, z_vec))
+        # Project onto plane normal to Z
+        proj_forward = v_forward - np.dot(v_forward, z_vec) * z_vec
+        proj_forward /= (np.linalg.norm(proj_forward) + 1e-9)
+        
+        final_x = proj_forward # Approach
+        final_z = z_vec        # Normal
+        final_y = np.cross(final_z, final_x) # Bi-normal
+        
+        # R = [X, Y, Z]
+        R = np.column_stack((final_x, final_y, final_z))
         return R
 
     def process_frame(self) -> HandState:
@@ -262,10 +262,8 @@ class RobustTracker:
         box_data = self.get_mediapipe_box(img_rgb)
         
         if not box_data:
-            # Draw sleek "Searching" UI
-            cv2.rectangle(img_bgr, (w//2 - 150, h//2 - 30), (w//2 + 150, h//2 + 30), (0, 0, 0), -1)
-            cv2.putText(img_bgr, "SEARCHING RIGHT HAND...", (w//2 - 130, h//2 + 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            # Minimal "Searching" Indicator
+            # cv2.putText(img_bgr, "Searching Right Hand...", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             return img_bgr, None
 
         bbox, mp_lm = box_data
@@ -283,7 +281,7 @@ class RobustTracker:
             # Preprocess (FP32)
             _inp = cv2.resize(crop_input, (256, 256))
             _inp = torch.from_numpy(_inp).float().to(self.device) / 255.0
-            _inp = _inp.permute(2, 0, 1).unsqueeze(0) # [H, W, C] -> [1, C, H, W]
+            _inp = _inp.permute(2, 0, 1).unsqueeze(0)
             _inp = (_inp - self.mean) / self.std
             
             with torch.no_grad():
@@ -294,7 +292,7 @@ class RobustTracker:
             pred_joints = out['pred_keypoints_3d'][0].cpu().numpy()
             valid_hamer = True
         except Exception as e:
-            print(f"HaMeR Error: {e}")
+            pass
             
         if valid_hamer:
             # 3. Process 3D Data
@@ -306,8 +304,9 @@ class RobustTracker:
             wrist_px_y = int(mp_lm.landmark[0].y * h)
             
             d_list = []
-            for dy in range(-2, 3):
-                for dx in range(-2, 3):
+            pad = 2
+            for dy in range(-pad, pad+1):
+                for dx in range(-pad, pad+1):
                     d = depth_frame_obj.get_distance(wrist_px_x+dx, wrist_px_y+dy)
                     if d > 0: d_list.append(d)
             z_wrist_m = np.median(d_list) if d_list else 0.5
@@ -361,9 +360,7 @@ class RobustTracker:
 
     def run(self):
         print("[INFO] Starting Robust Hybrid Tracker...")
-        print("[INFO] Press 'q' to exit.")
         try:
-            frame_cnt = 0
             while True:
                 t_start = time.time()
                 img, state = self.process_frame()
@@ -373,121 +370,112 @@ class RobustTracker:
                 if state:
                     draw_ui_overlay(img, state, fps)
                 
-                cv2.imshow("DexTel Robust Tracker", img)
+                cv2.imshow("DexTel Control", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-                frame_cnt += 1
         finally:
             self.pipeline.stop()
             cv2.destroyAllWindows()
 
 
-def draw_wrist_frame(image, u, v, R, axis_len=50):
-    # R cols: [Approach, BiNormal, Normal]
-    # Approach (Red), Normal (Green)
-    # We are drawing in 2D Screen space (simple projection of direction)
-    # Assuming weak perspective for direction vector viz
-    
+def draw_wrist_frame(image, u, v, R, axis_len=60):
+    # R cols: [X, Y, Z] -> [Red, Blue, Green]
     origin = (u, v)
     
-    # Project 3D vectors to 2D is tricky without full projection matrix logic on the rotation.
-    # But we want to visualize the 3D frame.
-    # Let's simple draw the projected vectors if we had them.
-    # Simplified: Just draw unit vectors scaled.
-    # Note: This is "Fake" 2D projection of the 3D rotation, strictly speaking incorrect but useful enough for debug.
-    # Correct way: Add `axis_len` in 3D to wrist position, then project.
+    # Simple 2D projection of 3D rotation columns
+    # We assume 'y' in 3D is roughly 'y' on screen for visualization sake
+    # (Not perfect but clear enough for orientation check)
     
-    # Already computed P_app, P_norm in previous code could use `rs2_project...`
-    # But R here is purely rotation.
-    # Let's skip complex projection here since we don't pass full pos/intrinsics easily here.
-    # Just draw a circle for wrist.
-    cv2.circle(image, origin, 5, (0, 255, 255), -1)
+    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)] # BGR: Red, Blue, Green
+    labels = ['X', 'Y', 'Z']
+    
+    for i in range(3):
+        # Project 3D vector to 2D
+        # x_2d = x_3d, y_2d = -y_3d (image CS is y-down, 3D is y-up usually? No, camera frame y-down)
+        # Just direct projection
+        vec = R[:, i]
+        end_pt = (int(u + vec[0] * axis_len), int(v + vec[1] * axis_len))
+        
+        cv2.line(image, origin, end_pt, colors[i], 3, cv2.LINE_AA)
+        
+    cv2.circle(image, origin, 6, (255, 255, 255), -1)
+    cv2.circle(image, origin, 4, (0, 0, 0), 1)
 
 def draw_hand_mesh(image, vertices, faces, intrinsics, bx, by, bw, bh):
-    # Vertices are in Crop Coordinates (Canonical).
-    # Need to map back to Screen.
-    # This is complex because HaMeR output is weak-perspective camera relative to crop center.
-    # Simplified: Just draw BBox for now to keep it clean.
-    cv2.rectangle(image, (bx, by), (bx+bw, by+bh), (255, 255, 0), 2)
-    # Add a cool label
-    cv2.putText(image, "RIGHT HAND TARGET", (bx, by-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+    # Minimal BBox
+    cv2.rectangle(image, (bx, by), (bx+bw, by+bh), (255, 255, 255), 1)
+    cv2.rectangle(image, (bx-1, by-1), (bx+bw+1, by+bh+1), (0, 0, 0), 1)
 
 def draw_ui_overlay(image, state: HandState, fps: float):
     h, w = image.shape[:2]
     
-    # Theme Colors
-    c_bg = (20, 20, 30)
-    c_acc = (0, 255, 255) # Cyan
-    c_warn = (0, 0, 255) # Red
-    c_safe = (0, 255, 0) # Green
+    # --- Premium Minimalist UI ---
     
-    # Sidebar
-    sidebar_w = 300
+    # 1. Top Bar (Status)
+    # Transparent black strip
+    bar_h = 60
     overlay = image.copy()
-    cv2.rectangle(overlay, (w - sidebar_w, 0), (w, h), c_bg, -1)
-    cv2.addWeighted(overlay, 0.8, image, 0.2, 0, image)
+    cv2.rectangle(overlay, (0, 0), (w, bar_h), (10, 10, 10), -1)
+    cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
     
-    # Header
-    x_base = w - sidebar_w + 20
-    y = 50
-    cv2.putText(image, "DexTel CONTROL", (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, c_acc, 2)
-    y += 40
+    # Text
+    font = cv2.FONT_HERSHEY_DUPLEX
+    
+    # Logo / Title
+    cv2.putText(image, "DexTel", (20, 40), font, 1.0, (255, 255, 255), 1, cv2.LINE_AA)
     
     # FPS
-    cv2.putText(image, f"FPS: {fps:.1f}", (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
-    y += 50
+    cv2.putText(image, f"{fps:.0f} FPS", (160, 40), font, 0.6, (150, 150, 150), 1, cv2.LINE_AA)
     
-    # Gripper State
-    cv2.putText(image, "GRIPPER STATE", (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
-    y += 30
+    # Gripper Status Indicator (Pill Shape)
+    status_txt = "GRIPPED" if state.is_pinched else "RELEASED"
+    status_color = (0, 200, 100) if state.is_pinched else (200, 200, 200) # Green vs Gray
     
-    state_txt = "CLOSED" if state.is_pinched else "OPEN"
-    c_st = c_safe if not state.is_pinched else c_warn
+    # Draw pill
+    pill_x, pill_y, pill_w, pill_h = w - 180, 15, 160, 30
+    cv2.rectangle(image, (pill_x, pill_y), (pill_x+pill_w, pill_y+pill_h), status_color, -1)
     
-    # Draw State Box
-    cv2.rectangle(image, (x_base, y), (x_base + 200, y + 50), c_st, -1)
-    text_size = cv2.getTextSize(state_txt, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
-    tx = x_base + (200 - text_size[0]) // 2
-    ty = y + (50 + text_size[1]) // 2
-    cv2.putText(image, state_txt, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-    y += 80
+    # Centered Text
+    txt_size = cv2.getTextSize(status_txt, font, 0.6, 1)[0]
+    tx = pill_x + (pill_w - txt_size[0]) // 2
+    ty = pill_y + (pill_h + txt_size[1]) // 2
+    cv2.putText(image, status_txt, (tx, ty), font, 0.6, (0, 0, 0) if state.is_pinched else (50, 50, 50), 1, cv2.LINE_AA)
     
-    # Pinch Metric Bar
-    cv2.putText(image, "PINCH DISTANCE", (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
-    y += 15
+    # 2. Floating Info Panel (Bottom Left)
+    panel_w, panel_h = 240, 120
+    px, py = 20, h - 20 - panel_h
     
-    # Bar Background
-    bar_w = 240
-    bar_h = 10
-    cv2.rectangle(image, (x_base, y), (x_base + bar_w, y + bar_h), (50, 50, 50), -1)
+    overlay = image.copy()
+    cv2.rectangle(overlay, (px, py), (px+panel_w, py+panel_h), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
     
-    # Bar Fill (Max range approx 0.15m)
-    fill_ratio = max(0, min(1.0, state.pinch_dist / 0.15))
-    fill_w = int(bar_w * fill_ratio)
-    cv2.rectangle(image, (x_base, y), (x_base + fill_w, y + bar_h), c_acc, -1)
+    # Position
+    cv2.putText(image, "WRIST POSITION", (px+15, py+30), font, 0.5, (180, 180, 180), 1, cv2.LINE_AA)
+    cv2.putText(image, f"X {state.position[0]:.3f}", (px+15, py+55), font, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(image, f"Y {state.position[1]:.3f}", (px+15, py+80), font, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(image, f"Z {state.position[2]:.3f}", (px+15, py+105), font, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Threshold Markers
-    close_x = int(bar_w * (PINCH_CLOSE_THRESH / 0.15))
-    open_x = int(bar_w * (PINCH_OPEN_THRESH / 0.15))
-    cv2.line(image, (x_base + close_x, y - 5), (x_base + close_x, y + bar_h + 5), c_warn, 2)
-    cv2.line(image, (x_base + open_x, y - 5), (x_base + open_x, y + bar_h + 5), c_safe, 2)
+    # 3. Dynamic Pinch Bar (Bottom Center)
+    kp_w = 400
+    kx = (w - kp_w) // 2
+    ky = h - 40
     
-    y += 30
-    cv2.putText(image, f"{state.pinch_dist*100:.1f} cm", (x_base + bar_w - 60, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, c_acc, 1)
+    # Track
+    cv2.line(image, (kx, ky), (kx+kp_w, ky), (100, 100, 100), 4)
     
-    # Position Info
-    y += 40
-    cv2.putText(image, "WRIST POSITION", (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
-    y += 25
-    pos_str = f"X: {state.position[0]:.3f}"
-    cv2.putText(image, pos_str, (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    y += 25
-    pos_str = f"Y: {state.position[1]:.3f}"
-    cv2.putText(image, pos_str, (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    y += 25
-    pos_str = f"Z: {state.position[2]:.3f}"
-    cv2.putText(image, pos_str, (x_base, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-
+    # Threshold Ticks
+    range_max = 0.15 # 15cm
+    close_x = kx + int((PINCH_CLOSE_THRESH / range_max) * kp_w)
+    open_x = kx + int((PINCH_OPEN_THRESH / range_max) * kp_w)
+    
+    cv2.line(image, (close_x, ky-10), (close_x, ky+10), (0, 0, 255), 2) # Close Mark
+    cv2.line(image, (open_x, ky-10), (open_x, ky+10), (0, 255, 0), 2)   # Open Mark
+    
+    # Current Value (Circle)
+    curr_x = kx + int((min(range_max, state.pinch_dist) / range_max) * kp_w)
+    val_color = (0, 255, 255) # Cyan
+    cv2.circle(image, (curr_x, ky), 8, val_color, -1)
+    cv2.circle(image, (curr_x, ky), 10, (255, 255, 255), 2)
 
 if __name__ == "__main__":
     tracker = RobustTracker()
