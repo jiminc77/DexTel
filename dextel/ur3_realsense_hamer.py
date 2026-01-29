@@ -8,9 +8,19 @@ import torch
 import warnings
 from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
+import os
+import hamer
 from hamer.models import load_hamer, DEFAULT_CHECKPOINT
 
 warnings.filterwarnings("ignore")
+
+def get_hamer_checkpoint_path():
+    hamer_pkg_path = os.path.dirname(hamer.__file__) 
+    hamer_root = os.path.dirname(hamer_pkg_path)
+    
+    if not os.path.isabs(DEFAULT_CHECKPOINT):
+        return os.path.join(hamer_root, DEFAULT_CHECKPOINT)
+    return DEFAULT_CHECKPOINT
 
 HAMER_CONFIDENCE_THRESH = 0.5
 PINCH_CLOSE_THRESH = 0.05
@@ -74,7 +84,7 @@ class RobustTracker:
         )
         
         print("[INFO] Loading HaMeR Model...")
-        self.model, self.model_cfg = load_hamer(DEFAULT_CHECKPOINT)
+        self.model, self.model_cfg = load_hamer(get_hamer_checkpoint_path())
         self.model = self.model.to(self.device).eval()
         
         self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(3, 1, 1).float()
