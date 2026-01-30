@@ -91,10 +91,10 @@ class RetargetingWrapper:
         model.lowerPositionLimit[0] = -1.6 # ~ -90 deg
         model.upperPositionLimit[0] = 1.6  # ~ +90 deg
         
-        self.retargeting = SeqRetargeting(
-            optimizer=self.optimizer,
-            has_joint_limits=True
-        )
+        # Removed SeqRetargeting wrapper due to state mismanagement with Fixed Joints
+        # We will manage warm-start state manually (Classic Control).
+        self.last_q = np.array(home_joints) # Use provided home joints as initial seed
+        self.filter = None # Initialize filter to None
         
         # Must match the offset distance of tool0_z/y in the URDF (0.1m)
         self.vector_scale = 0.1 
@@ -106,23 +106,14 @@ class RetargetingWrapper:
         print(f"[INFO] Retargeting Config: {len(target_joint_names)} Optimized Joints, {self.num_fixed} Fixed Joints.")
         
     def solve(self, target_pos, target_rot):
-        # target_rot columns are X, Y, Z axes
+        # Input Validation
+        if np.isnan(target_pos).any() or np.isnan(target_rot).any():
+             print(f"[ERR] Retargeting Input contains NaNs!")
+             return self.last_q
+
+        # Construct Target Vectors (Relative)
         v_approach = target_rot[:, 2] # Z axis
         v_normal = target_rot[:, 1]   # Y axis
-        
-        # Construct target vectors matching the URDF link pairs
-        # 1. Position: target_pos
-        # 2. Z vector: v_approach * scale (Relative dir)
-        # 3. Y vector: v_normal * scale (Relative dir)
-        
-        if np.isnan(target_pos).any() or np.isnan(target_rot).any():
-             print(f"[ERR] Retargeting Input contains NaNs! Pos: {target_pos} Rot: {target_rot}")
-             return np.zeros(6)
-
-        # 2. Construct Target Vectors
-        # We are using Relative Targets because origin_link="tool0" and task_link="tool0_z".
-        # So we compare (Pos_tool0_z - Pos_tool0) with (Target_Vector_Z).
-        # Target Vector Z is just Direction * Scale.
         
         target_vecs = np.vstack([
             target_pos,
@@ -131,15 +122,25 @@ class RetargetingWrapper:
         ])
         
         try:
-            # SeqRetargeting.retarget expects a single ref_value array
-            result_q = self.retargeting.retarget(
+            # Direct Optimizer Call
+            # We explicitly manage last_q (6D) to ensure correct warm start
+            result_q = self.optimizer.retarget(
                 ref_value=target_vecs,
-                fixed_qpos=self.fixed_qpos
+                fixed_qpos=self.fixed_qpos,
+                last_qpos=self.last_q
             )
+            
+            # Update state
+            self.last_q = result_q
+            
+            # (Optional) Apply smoothing if filter exists. For now, raw output is safer than buggy filter.
+            # Just ensure stability first.
+            
             return result_q
+            
         except Exception as e:
             print(f"[ERR] Retargeting failed: {e}")
-            return np.zeros(6)
+            return self.last_q
 
     def compute_fk(self, q):
         """
@@ -171,8 +172,7 @@ class RetargetingWrapper:
 
     def reset_state(self, q: np.ndarray):
         """
-        Resets the internal state (warm start) of the IK solver to the specified joint config.
-        Crucial for avoiding 'flipping' when switching modes.
+        Resets the internal state (warm start) of the IK solver.
         """
         # q should be 6D (optimized joints only).
         # compute_fk handles padding internally for Pinocchio.
