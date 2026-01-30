@@ -7,7 +7,7 @@ from dex_retargeting.seq_retarget import SeqRetargeting
 from typing import Optional
 
 class RetargetingWrapper:
-    def __init__(self, urdf_path):
+    def __init__(self, urdf_path, home_joints):
         if not os.path.exists(urdf_path):
             print(f"[WARN] URDF not found at {urdf_path}. Retargeting will fail.")
             
