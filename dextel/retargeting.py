@@ -101,10 +101,23 @@ class RetargetingWrapper:
              print(f"[ERR] Retargeting Input contains NaNs! Pos: {target_pos} Rot: {target_rot}")
              return np.zeros(6)
 
+        # 2. Construct Target Vectors
+        # Important: VectorOptimizer minimizes || Pos_robot_link - Pos_target ||.
+        # So we must provide ABSOLUTE positions for the helper links too.
+        
+        # Target for tool0 -> target_pos
+        # Target for tool0_z -> target_pos + (Z_dir * scale)
+        # Target for tool0_y -> target_pos + (Y_dir * scale)
+        
+        # v_approach is Z axis direction
+        target_pos_z = target_pos + (v_approach * self.vector_scale)
+        # v_normal is Y axis direction
+        target_pos_y = target_pos + (v_normal * self.vector_scale)
+        
         target_vecs = np.vstack([
             target_pos,
-            v_approach * self.vector_scale,
-            v_normal * self.vector_scale
+            target_pos_z,
+            target_pos_y
         ])
         
         try:
@@ -169,10 +182,13 @@ class RetargetingWrapper:
         v_approach = rot[:, 2] # Z
         v_normal = rot[:, 1]   # Y
         
+        target_pos_z = pos + (v_approach * self.vector_scale)
+        target_pos_y = pos + (v_normal * self.vector_scale)
+        
         target_vecs = np.vstack([
             pos,
-            v_approach * self.vector_scale,
-            v_normal * self.vector_scale
+            target_pos_z,
+            target_pos_y
         ])
         
         # 3. Force Retarget
