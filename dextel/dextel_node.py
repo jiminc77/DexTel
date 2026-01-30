@@ -88,11 +88,6 @@ class DexTelNode(Node):
         elif key & 0xFF == ord('r'):
             # Logic: If Hand -> Calibrate. If No Hand -> Wait.
             
-            # --- CRITICAL: Reset IK Solver State to Home ---
-            # Prevents "flipping" / weird solutions by telling solver we are at Home.
-            if self.retargeting_enabled:
-                self.retargeting.reset_state(self.home_joints)
-
             if state is not None:
                 self.state = STATE_CALIBRATING
                 self.calib_start_time = time.time()
@@ -149,6 +144,11 @@ class DexTelNode(Node):
                         self.origin_hand_pos = avg_pos
                         self.origin_hand_rot = avg_rot
                         
+                        # --- CRITICAL: Reset IK Solver State to Home ---
+                        # Call it RIGHT BEFORE Active mode starts
+                        if self.retargeting_enabled:
+                            self.retargeting.reset_state(self.home_joints)
+                        
                         self.state = STATE_ACTIVE
                         self.get_logger().info(f"Calibration Done. Origin Pos: {avg_pos}")
                     else:
@@ -183,6 +183,10 @@ class DexTelNode(Node):
                         q_raw = q_raw[:6]
                         
                     if np.isnan(q_raw).any(): q_raw = np.zeros(6)
+                    
+                    # DEBUG: Check for flip on first frame? (Optional)
+                    # if self.q_filtered is None:
+                    #     self.get_logger().info(f"First Active IK: {q_raw} (Home: {self.home_joints})")
                     
                     if self.q_filtered is None: self.q_filtered = q_raw
                     else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
