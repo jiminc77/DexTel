@@ -159,28 +159,34 @@ def main():
         # We need to set them to be position controlled (high stiffness)
         # This requires using the Articulation API from the robot object
         
-        joint_names = robot.dof_names
-        gripper_indices = [i for i, n in enumerate(joint_names) if "Slider" in n]
-        
-        if gripper_indices:
-            print(f"[DexTel] Configuring Gripper Joints at indices: {gripper_indices}")
-            # Set stiffness/damping for these joints
-            # Note: set_joint_drives might vary by Isaac Sim version, using set_gains if available or specialized call
+        if hasattr(robot, "dof_names"):
+            joint_names = robot.dof_names
+            # Robust Gripper Detection: Look for common keywords
+            gripper_keywords = ["Slider", "finger", "drive", "hand"]
+            gripper_indices = [i for i, n in enumerate(joint_names) if any(k in n for k in gripper_keywords) and "shoulder" not in n and "wrist" not in n and "elbow" not in n]
             
-            # Attempt to set gains for all joints to ensure good tracking
-            # Arm joints: mild stiffness, gripper: high stiffness
-            stiffness = np.ones(robot.num_dof) * 10000.0
-            damping = np.ones(robot.num_dof) * 1000.0
-            
-            # Apply to robot
-            # Use specific methods for Articulation (Robot inherits from Articulation)
-            # The Robot wrapper seems to lack direct set_gains in this version,
-            # but _articulation_view should handle it.
-            if hasattr(robot, "_articulation_view"):
-                robot._articulation_view.set_gains(kps=stiffness, kds=damping)
-                print("[DexTel] Robot gains set for position control via _articulation_view.")
+            if gripper_indices:
+                print(f"[DexTel] Configuring Gripper Joints at indices: {gripper_indices} ({[joint_names[i] for i in gripper_indices]})")
+                
+                # Get current gains (if possible) or set default
+                # Arm joints: Mild Stiffness (to allow IK compliance if needed, but usually high for positional control)
+                # Gripper joints: High Stiffness (to hold position)
+                
+                kps = np.ones(robot.num_dof) * 10000.0
+                kds = np.ones(robot.num_dof) * 1000.0
+                
+                # Make gripper extra stiff? 10000 is already quite high.
+                # If dangling, main issue is likely kps was 0 or defaulting to 0 for those joints.
+                
+                if hasattr(robot, "_articulation_view"):
+                    robot._articulation_view.set_gains(kps=kps, kds=kds)
+                    print(f"[DexTel] Applied High Stiffness (kps={kps[0]}) to ALL joints including gripper.")
+                else:
+                    print("[DexTel] [WARN] Could not set gains: _articulation_view not found.")
             else:
-                 print("[DexTel] [WARN] Could not set gains: _articulation_view not found.")
+                 print("[DexTel] [WARN] No gripper joints found with keywords: 'Slider', 'finger', 'drive', 'hand'. Gripper might dangle.")
+        else:
+             print("[DexTel] [WARN] robot.dof_names not found.")
             
     except Exception as e:
         print(f"[DexTel] Could not configure robot/gripper: {e}")
