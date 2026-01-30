@@ -174,12 +174,8 @@ class RetargetingWrapper:
         Resets the internal state (warm start) of the IK solver to the specified joint config.
         Crucial for avoiding 'flipping' when switching modes.
         """
-        # Ensure correct size
-        model = self.optimizer.robot.model
-        if q.shape[0] != model.nq:
-             q_padded = np.zeros(model.nq)
-             q_padded[:min(q.shape[0], model.nq)] = q
-             q = q_padded
+        # q should be 6D (optimized joints only).
+        # compute_fk handles padding internally for Pinocchio.
              
         # Reset SeqRetargeting internal state
         if hasattr(self.retargeting, 'last_q'):
@@ -212,6 +208,5 @@ class RetargetingWrapper:
             
             # Re-enforce last_q just in case the solve moved it slightly (it shouldn't if q is exact solution)
             self.retargeting.last_q = q
-            # print(f"[INFO] Retargeting State Reset & Warmed Up to: {q[:6]}")
         except Exception as e:
             print(f"[ERR] Reset State Warmup Failed: {e}")
