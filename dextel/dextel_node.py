@@ -32,7 +32,7 @@ class DexTelNode(Node):
 
         self.get_logger().info(f"Initializing Retargeting (URDF: {urdf_path})...")
         try:
-            self.retargeting = RetargetingWrapper(urdf_path)
+            self.retargeting = RetargetingWrapper(urdf_path, self.home_joints)
             self.retargeting_enabled = True
         except Exception as e:
             self.get_logger().error(f"Retargeting Init Failed: {e}")

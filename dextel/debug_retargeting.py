@@ -16,9 +16,12 @@ def main():
     if not os.path.exists(urdf_path):
         urdf_path = "/home/husl-ai/workspace/ros2_ws/src/dextel/dextel/assets/ur3e_hande.urdf"
 
-    print(f"Testing with URDF: {urdf_path}")
+    print(f"[INFO] Initializing Retargeting with URDF: {urdf_path}")
     
-    wrapper = RetargetingWrapper(urdf_path)
+    # Correct Home Joints from dextel_node.py
+    home_joints = np.array([0.0, -1.5708, -1.5708, -1.5708, 1.5708, 0.0])
+    
+    wrapper = RetargetingWrapper(urdf_path, home_joints)
     model = wrapper.optimizer.robot.model
     
     print(f"Frame 'tool0': {model.existFrame('tool0')}")
