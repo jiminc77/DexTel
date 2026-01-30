@@ -24,14 +24,24 @@ def main():
     print(f"Frame 'tool0_y': {model.existFrame('tool0_y')}")
     print(f"Base Limits: [{model.lowerPositionLimit[0]}, {model.upperPositionLimit[0]}]")
     
-    print("\n[DEBUG] Optimizer Introspection:")
-    # print(dir(wrapper.optimizer))
-    for k, v in wrapper.optimizer.__dict__.items():
-        if not k.startswith('_'): 
-            print(f"  {k}: {type(v)}")
+    print(f"Base Limits: [{model.lowerPositionLimit[0]}, {model.upperPositionLimit[0]}]")
     
-    # Correct Home Joints from dextel_node.py
-    # [0, -90, -90, -90, 90, 0]
+    print("\n[DEBUG] Optimizer Internals:")
+    opt = wrapper.optimizer
+    print(f"Computed Link Names: {opt.computed_link_names}")
+    print(f"Task Link Names: {opt.task_link_names}")
+    print(f"Target Origin Names: {opt.origin_link_names}")
+    print(f"Target Link Indices: {opt.target_link_human_indices}")
+    
+    # Check Base Pose
+    base_name = "ur3e_base_link"
+    if model.existFrame(base_name):
+        bid = model.getFrameId(base_name)
+        base_pose = wrapper.optimizer.robot.data.oMf[bid]
+        print(f"Base Link ({base_name}) Pose:\n{base_pose}")
+    else:
+        print(f"Base Link {base_name} NOT FOUND")
+
     home_joints = np.array([0.0, -1.5708, -1.5708, -1.5708, 1.5708, 0.0])
     
     # 1. Reset State
