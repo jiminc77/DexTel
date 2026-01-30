@@ -86,7 +86,8 @@ class RetargetingWrapper:
             has_joint_limits=True
         )
         
-        self.vector_scale = 0.5 # Updated to mismatch twist
+        # Must match the offset distance of tool0_z/y in the URDF (0.1m)
+        self.vector_scale = 0.1 
         
     def solve(self, target_pos, target_rot):
         # target_rot columns are X, Y, Z axes
