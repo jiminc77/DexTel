@@ -7,7 +7,7 @@ from dex_retargeting.seq_retarget import SeqRetargeting
 from typing import Optional
 
 class RetargetingWrapper:
-    def __init__(self, urdf_path):
+    def __init__(self, urdf_path: str):
         if not os.path.exists(urdf_path):
             print(f"[WARN] URDF not found at {urdf_path}. Retargeting will fail.")
             
@@ -45,7 +45,7 @@ class RetargetingWrapper:
         
         self.vector_scale = 0.1 # The offset distance used in URDF for tool0_z and tool0_y
         
-    def solve(self, target_pos, target_rot):
+    def solve(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         # target_rot columns are X, Y, Z axes
         v_approach = target_rot[:, 2] # Z axis
         v_normal = target_rot[:, 1]   # Y axis
@@ -75,16 +75,30 @@ class RetargetingWrapper:
             print(f"[ERR] Retargeting failed: {e}")
             return np.zeros(6)
 
-    def compute_fk(self, q):
+    def compute_fk(self, q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Computes the Forward Kinematics for the given joint configuration.
         Returns the position (xyz) and rotation matrix (3x3) of the end-effector (tool0).
         """
-        pin.forwardKinematics(self.optimizer.robot.model, self.optimizer.robot.data, q)
-        pin.updateFramePlacements(self.optimizer.robot.model, self.optimizer.robot.data)
+        model = self.optimizer.robot.model
+        data = self.optimizer.robot.data
+        
+        # Check Expected Size
+        if q.shape[0] != model.nq:
+            # print(f"[DEBUG] Padding q from {q.shape[0]} to {model.nq}. Model Joints: {model.names}")
+            # Pad with zeros (assuming arm joints are first)
+            q_padded = np.zeros(model.nq)
+            q_padded[:min(q.shape[0], model.nq)] = q
+            q = q_padded
+            
+        pin.forwardKinematics(model, data, q)
+        pin.updateFramePlacements(model, data)
         
         # 'tool0' is the target frame used in optimization
-        frame_id = self.optimizer.robot.model.getFrameId("tool0")
-        frame = self.optimizer.robot.data.oMf[frame_id]
-        
-        return frame.translation.copy(), frame.rotation.copy()
+        if self.optimizer.robot.model.existFrame("tool0"):
+            frame_id = self.optimizer.robot.model.getFrameId("tool0")
+            frame = self.optimizer.robot.data.oMf[frame_id]
+            return frame.translation.copy(), frame.rotation.copy()
+        else:
+            print("[ERR] 'tool0' frame not found in URDF!")
+            return np.zeros(3), np.eye(3)
