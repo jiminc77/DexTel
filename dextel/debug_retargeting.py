@@ -102,31 +102,38 @@ def main():
     # Test Direct Optimizer (Bypass Sequence Wrapper)
     print("\n--- Testing Direct Optimizer (Bypass Seq) ---")
     print(f"Signature Opt: {inspect.signature(wrapper.optimizer.retarget)}")
-    if hasattr(wrapper, 'retargeting'):
-        print(f"Signature Seq: {inspect.signature(wrapper.retargeting.retarget)}")
-
+    
+    # Check Optimizer DOF
+    tgt_jnames = wrapper.optimizer.target_joint_names
+    print(f"Optimizer Target Joints: {len(tgt_jnames)} ({tgt_jnames})")
+    
     # Reconstruct target vecs
     target_vecs = np.vstack([t_pos, t_vec_z, t_vec_y])
     
-    try:
-        # Correct Signature: retarget(ref_value, fixed_qpos, last_qpos)
-        opt_q = wrapper.optimizer.retarget(
-            ref_value=target_vecs, 
-            fixed_qpos=np.array([]), 
-            last_qpos=home_joints
-        )
-        
-        dir_diff = np.linalg.norm(opt_q[:6] - home_joints)
-        print(f"Direct Opt Base: {opt_q[0]}")
-        print(f"Direct Opt Diff Norm: {dir_diff}")
-        
-        if dir_diff < 0.1:
-            print(">> Direct Optimizer SUCCEEDED. Issue is in SeqRetargeting.")
-        else:
-            print(">> Direct Optimizer FAILED. Issue is in Optimizer/Cost landscape.")
-            
-    except Exception as e:
-        print(f"Direct Opt Failed: {e}")
+    def try_direct_solve(q_guess, label):
+        try:
+            print(f"Attempting {label} with shape {q_guess.shape}...")
+            # Correct Signature: retarget(ref_value, fixed_qpos, last_qpos)
+            opt_q = wrapper.optimizer.retarget(
+                ref_value=target_vecs, 
+                fixed_qpos=np.array([]), 
+                last_qpos=q_guess
+            )
+            dir_diff = np.linalg.norm(opt_q[:6] - home_joints)
+            print(f">> SUCCESS {label}. Base: {opt_q[0]}. Diff: {dir_diff}")
+            return True
+        except Exception as e:
+            print(f">> FAILED {label}: {repr(e)}")
+            return False
+
+    # Try 6D
+    try_direct_solve(home_joints, "6D")
+    
+    # Try 9D
+    nq = wrapper.optimizer.robot.model.nq
+    q_padded = np.zeros(nq)
+    q_padded[:len(home_joints)] = home_joints
+    try_direct_solve(q_padded, "9D")
 
     # 2. Get Home FK
     pos, rot = wrapper.compute_fk(home_joints)
