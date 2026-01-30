@@ -28,6 +28,7 @@ class HandState:
     bbox: list
     joints_3d: np.ndarray
     fps: float
+    rpy: np.ndarray = None
 
 class OneEuroFilter:
     def __init__(self, x0, t0, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
@@ -98,8 +99,8 @@ class RobustTracker:
     def init_realsense(self):
         self.pipeline = rs.pipeline()
         config = rs.config()
-        config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
-        config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
         
         profile = self.pipeline.start(config)
         stream = profile.get_stream(rs.stream.depth)
@@ -256,7 +257,9 @@ class RobustTracker:
             pad = 2
             for dy in range(-pad, pad+1):
                 for dx in range(-pad, pad+1):
-                    d = depth_frame_obj.get_distance(wrist_px_x+dx, wrist_px_y+dy)
+                    px = min(max(wrist_px_x + dx, 0), w - 1)
+                    py = min(max(wrist_px_y + dy, 0), h - 1)
+                    d = depth_frame_obj.get_distance(px, py)
                     if d > 0: d_list.append(d)
             z_wrist_m = np.median(d_list) if d_list else 0.5
             
@@ -274,6 +277,53 @@ class RobustTracker:
             if self.filter_pos is None:
                 self.filter_pos = OneEuroFilter(pos_3d, t_now, min_cutoff=1.0, beta=0.1)
             pos_smooth = self.filter_pos(t_now, pos_3d)
+
+            # --- Coordinate Transformation ---
+            
+            # --- Coordinate Transformation ---
+            
+            # 1. Position Mapping (Camera -> Robot)
+            # Mapped based on "Camera on Right, Facing User" setup:
+            # - User Hand Forward (Robot -x) = Camera Image Right (+x_cam) => X_rob = -X_cam
+            # - User Hand Right (Robot +y)   = Camera Depth Decrease (-z_cam) => Y_rob = -Z_cam
+            # - User Hand Up (Robot +z)      = Camera Image Up (-y_cam) => Z_rob = -Y_cam
+            R_pos_map = np.array([
+                [-1,  0,  0],
+                [ 0,  0, -1],
+                [ 0, -1,  0]
+            ])
+            pos_rob = R_pos_map @ pos_smooth
+            
+            # 2. Orientation Mapping
+            # Use the same global mapping so hand orientation follows the user's perspective.
+            R_rot_map = np.array([
+                [-1,  0,  0],
+                [ 0,  0, -1],
+                [ 0, -1,  0]
+            ])
+            
+            # 3. Local Hand Adjustment
+            # Maps Hand Frame (MANO) to Gripper Frame
+            # Hand Y (Fingers) -> Gripper Z (Approach)
+            # Hand Z (Palm)    -> Gripper Y (Up)
+            # Hand X (Side)    -> Gripper X (Side)
+            R_hand_local = np.array([
+                [1, 0, 0],
+                [0, 0, 1],
+                [0, 1, 0]
+            ])
+            
+            # Apply Rotations: Global_Map * Smooth_Rot * Local_Map
+            R_rob = R_rot_map @ R_smooth @ R_hand_local
+            
+            # 3. Workspace Offset
+            # Centering the workspace for UR3e reachability
+            # NOTE: User provided default pose:
+            # shoulder_pan: 0, lift: -90, elbow: -90, w1: -90, w2: 90, w3: 0
+            # This offset might need tuning to match that "Home" position.
+            # Currently keeping safe offsets.
+            # X: 0.3m (Forward), Y: -0.1m (Right), Z: 0.2m (Up)
+            pos_rob += np.array([0.3, -0.1, 0.2])
             
             thumb_tip = joints_centered[4]
             index_tip = joints_centered[8]
@@ -286,14 +336,17 @@ class RobustTracker:
                 
             draw_wrist_frame(img_bgr, wrist_px_x, wrist_px_y, R_smooth)
 
+            rpy_raw = rotationMatrixToEulerAngles(R_smooth)
+            
             state = HandState(
-                position=pos_smooth,
-                orientation=R_smooth,
+                position=pos_rob,
+                orientation=R_rob,
                 pinch_dist=pinch_dist,
                 is_pinched=self.pinch_state,
                 bbox=[x,y,w_box,h_box],
                 joints_3d=joints_centered,
-                fps=0
+                fps=0,
+                rpy=rpy_raw
             )
             return img_bgr, state
             
@@ -367,6 +420,29 @@ def draw_ui_overlay(image, state: HandState, fps: float):
         
     val_off = int((min(state.pinch_dist, rmax)/rmax)*cw)
     cv2.circle(image, (cx-cw//2+val_off, cy), 8, (0,255,255), -1)
+
+    # 4. Orientation Info (RPY)
+    cv2.rectangle(overlay, (w-200, h-140), (w-20, h-60), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+    
+    r_deg = np.degrees(state.rpy)
+    cv2.putText(image, "RAW ORIENTATION", (w-190, h-110), font, 0.5, (150, 150, 150), 1)
+    cv2.putText(image, f"R {r_deg[0]:.0f}", (w-190, h-85), font, 0.6, (255,255,255), 1)
+    cv2.putText(image, f"P {r_deg[1]:.0f}", (w-130, h-85), font, 0.6, (255,255,255), 1)
+    cv2.putText(image, f"Y {r_deg[2]:.0f}", (w-70, h-85), font, 0.6, (255,255,255), 1)
+
+def rotationMatrixToEulerAngles(R):
+    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+    singular = sy < 1e-6
+    if not singular:
+        x = math.atan2(R[2, 1], R[2, 2])
+        y = math.atan2(-R[2, 0], sy)
+        z = math.atan2(R[1, 0], R[0, 0])
+    else:
+        x = math.atan2(-R[1, 2], R[1, 1])
+        y = math.atan2(-R[2, 0], sy)
+        z = 0
+    return np.array([x, y, z])
 
 if __name__ == "__main__":
     RobustTracker().run()

@@ -26,7 +26,6 @@ class DexTelNode(Node):
             urdf_path = param_path
         
         self.pub_joints = self.create_publisher(JointState, '/target_joint_states', 10)
-        self.pub_gripper = self.create_publisher(Float64, '/gripper_command', 10)
         
         self.get_logger().info("Initializing Vision Tracker...")
         self.tracker = RobustTracker()
@@ -39,7 +38,11 @@ class DexTelNode(Node):
             self.get_logger().error(f"Retargeting Init Failed: {e}")
             self.retargeting_enabled = False
             
+        self.q_filtered = None
+        self.alpha = 0.4 # Smoothing factor (0.0 = infinite smooth/lag, 1.0 = no smooth)
+
         self.timer = self.create_timer(1.0/30.0, self.control_loop)
+        self.frame_count = 0
         self.get_logger().info("DexTel Node Ready.")
 
     def control_loop(self):
@@ -52,22 +55,42 @@ class DexTelNode(Node):
         fps = 0.0 
         
         if state and self.retargeting_enabled:
-            q_sol = self.retargeting.solve(state.position, state.orientation)
+            q_raw = self.retargeting.solve(state.position, state.orientation)
             
+            # Simple NaN check
+            if np.isnan(q_raw).any():
+                q_raw = np.zeros(6) # Fallback
+                
+            # Smoothing (EMA)
+            if self.q_filtered is None:
+                self.q_filtered = q_raw
+            else:
+                self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
+                
+            q_sol = self.q_filtered
+            
+            # Gripper Logic
+            grip_open = 0.0 # Open
+            grip_closed = 0.8 # Closed/Pinched
+            grip_pos = grip_closed if state.is_pinched else grip_open
+
+            # Combined Message (Arm + Gripper)
             joint_msg = JointState()
             joint_msg.header.stamp = self.get_clock().now().to_msg()
             joint_msg.name = [
                 "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
-                "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
+                "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
+                "Slider_1", "Slider_2"
             ]
-            joint_msg.position = q_sol.tolist()
+            # Combine arm solution and gripper positions
+            # q_sol includes helper joints, so we take the first 6 (arm joints)
+            joint_msg.position = q_sol[:6].tolist() + [grip_pos, grip_pos]
+            joint_msg.velocity = [0.0] * 8
+            joint_msg.effort = [0.0] * 8
+            
             self.pub_joints.publish(joint_msg)
             
-            grip_val = 0.8 if state.is_pinched else 0.0
-            
-            grip_msg = Float64()
-            grip_msg.data = grip_val
-            self.pub_gripper.publish(grip_msg)
+            self.pub_joints.publish(joint_msg)
             
         if state:
             draw_ui_overlay(img, state, 0.0)
