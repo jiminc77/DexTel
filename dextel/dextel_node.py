@@ -3,6 +3,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Float64MultiArray
 from builtin_interfaces.msg import Time
+from ament_index_python.packages import get_package_share_directory
 
 import numpy as np
 import cv2
