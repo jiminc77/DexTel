@@ -25,7 +25,12 @@ class DexTelNode(Node):
         self.robot_home_rot = None
         
         # Load Workspace Config
-        self.dextel_base = get_package_share_directory('dextel')
+        try:
+            self.dextel_base = get_package_share_directory('dextel')
+        except Exception as e:
+            self.get_logger().warn(f"Could not find package share directory ({e}). Falling back to local source path.")
+            # Fallback: assume we are in src/dextel/dextel/dextel_node.py -> want src/dextel
+            self.dextel_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
