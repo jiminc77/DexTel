@@ -197,10 +197,11 @@ def main():
                         
                         # Set Properties for Position Control (Stiff)
                         # We use a very high stiffness to ensure it holds position
-                        drive_api.CreateStiffnessAttr(1.0e5)
-                        drive_api.CreateDampingAttr(1.0e4)
+                        # Reduced to 1.0e4 to prevent physics jitter (1.0e5 was too high)
+                        drive_api.CreateStiffnessAttr(1.0e4)
+                        drive_api.CreateDampingAttr(1.0e3)
                         
-                        print(f"    -> Applied {drive_type} DriveAPI: Stiffness=1.0e5, Damping=1.0e4")
+                        print(f"    -> Applied {drive_type} DriveAPI: Stiffness=1.0e4, Damping=1.0e3")
                         count += 1
             
             if count == 0:

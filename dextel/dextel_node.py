@@ -54,7 +54,7 @@ class DexTelNode(Node):
             self.retargeting_enabled = False
             
         self.q_filtered = None
-        self.alpha = 0.4
+        self.alpha = 0.1
 
         self.timer = self.create_timer(1.0/30.0, self.control_loop)
         self.get_logger().info("DexTel Node Ready.")

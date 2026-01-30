@@ -387,7 +387,8 @@ def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tup
     
     # 1. Status Bar
     cv2.rectangle(overlay, (0, 0), (w, 50), (10, 10, 10), -1)
-    cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+    # Lighter overlay: 0.4 overlay + 0.6 image
+    cv2.addWeighted(overlay, 0.4, image, 0.6, 0, image)
     
     font = cv2.FONT_HERSHEY_DUPLEX
     cv2.putText(image, "DexTel", (20, 35), font, 0.8, (255, 255, 255), 1, cv2.LINE_AA)
