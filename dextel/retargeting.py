@@ -16,6 +16,36 @@ class RetargetingWrapper:
         # Initialize Robot Wrapper
         robot = RobotWrapper(urdf_path)
         
+        # --- DYNAMIC FRAMES INJECTION ---
+        # If URDF is missing helper frames for orientation (tool0_z, tool0_y), add them now.
+        model = robot.model
+        if model.existFrame("tool0") and not model.existFrame("tool0_z"):
+            print("[INFO] Injecting virtual orientation frames (tool0_z, tool0_y)...")
+            tool0_id = model.getFrameId("tool0")
+            tool0_frame = model.frames[tool0_id]
+            parent_joint = tool0_frame.parent
+            parent_placement = tool0_frame.placement # Transform from Joint to tool0
+            
+            # tool0_z: 0.1m along Z of tool0
+            d_z = pin.SE3.Identity()
+            d_z.translation = np.array([0.0, 0.0, 0.1])
+            placement_z = parent_placement * d_z
+            
+            frame_z = pin.Frame("tool0_z", parent_joint, tool0_id, placement_z, pin.FrameType.OP_FRAME)
+            model.addFrame(frame_z)
+            
+            # tool0_y: 0.1m along Y of tool0
+            d_y = pin.SE3.Identity()
+            d_y.translation = np.array([0.0, 0.1, 0.0])
+            placement_y = parent_placement * d_y
+            
+            frame_y = pin.Frame("tool0_y", parent_joint, tool0_id, placement_y, pin.FrameType.OP_FRAME)
+            model.addFrame(frame_y)
+            
+            # Re-create data to accommodate new frames
+            robot.data = model.createData()
+            
+        
         # Define links for vector optimization
         # 1. Position: Base -> Tool0
         # 2. Orientation Z: Tool0 -> Tool0_Z (Offset 0.1m along Z)
@@ -24,26 +54,7 @@ class RetargetingWrapper:
         target_origin_link_names = ["ur3e_base_link", "tool0", "tool0"]
         target_task_link_names = ["tool0", "tool0_z", "tool0_y"]
         
-        # Indices are not strictly used in the logic we rely on (direct retargeting), 
-        # but required by init. Passing dummy indices.
-        # VectorOptimizer expects shape (2, N_vectors)
-        dummy_indices = np.zeros((2, 3), dtype=int)
-
-        self.optimizer = VectorOptimizer(
-            robot=robot,
-            target_joint_names=robot.dof_joint_names,
-            target_origin_link_names=target_origin_link_names,
-            target_task_link_names=target_task_link_names,
-            target_link_human_indices=dummy_indices,
-            scaling=1.0
-        )
-        
-        self.retargeting = SeqRetargeting(
-            optimizer=self.optimizer,
-            has_joint_limits=True
-        )
-        
-        self.vector_scale = 0.1 # The offset distance used in URDF for tool0_z and tool0_y
+        self.vector_scale = 0.1 # Must match the injection offset
         
     def solve(self, target_pos, target_rot):
         # target_rot columns are X, Y, Z axes
