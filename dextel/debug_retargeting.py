@@ -2,6 +2,8 @@
 import numpy as np
 import os
 import pinocchio as pin
+import sys
+import inspect
 from dextel.retargeting import RetargetingWrapper
 
 def main():
@@ -99,6 +101,10 @@ def main():
     
     # Test Direct Optimizer (Bypass Sequence Wrapper)
     print("\n--- Testing Direct Optimizer (Bypass Seq) ---")
+    print(f"Signature Opt: {inspect.signature(wrapper.optimizer.retarget)}")
+    if hasattr(wrapper, 'retargeting'):
+        print(f"Signature Seq: {inspect.signature(wrapper.retargeting.retarget)}")
+
     # Reconstruct target vecs
     target_vecs = np.vstack([t_pos, t_vec_z, t_vec_y])
     
