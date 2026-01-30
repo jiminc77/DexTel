@@ -77,7 +77,8 @@ class DexTelNode(Node):
         if not hasattr(self, 'state'):
             self.state = STATE_WAITING
             self.calib_start_time = 0.0
-            self.calib_samples = []
+            self.calib_samples_pos = []
+            self.calib_samples_rot = [] # Store rotations
 
         # --- User Input ---
         key = cv2.waitKey(1)
@@ -89,7 +90,8 @@ class DexTelNode(Node):
             if state is not None:
                 self.state = STATE_CALIBRATING
                 self.calib_start_time = time.time()
-                self.calib_samples = []
+                self.calib_samples_pos = []
+                self.calib_samples_rot = []
                 self.q_filtered = None # Reset filter
                 self.get_logger().info("Starting Calibration (2s)...")
             else:
@@ -124,16 +126,25 @@ class DexTelNode(Node):
                 ui_color = (0, 255, 255) # Yellow
                 
                 if state:
-                    self.calib_samples.append(state.position)
+                    self.calib_samples_pos.append(state.position)
+                    self.calib_samples_rot.append(state.orientation)
                 
                 if elapsed >= 2.0:
                     # Finish Calibration
-                    if len(self.calib_samples) > 0:
-                        # Average samples for robust origin
-                        avg_pos = np.mean(self.calib_samples, axis=0)
+                    if len(self.calib_samples_pos) > 0:
+                        # Average position
+                        avg_pos = np.mean(self.calib_samples_pos, axis=0)
+                        
+                        # Average/Select rotation
+                        # Averaging matrices is complex (SVD), simplest is to pick the last one or middle one.
+                        # For short 2s stable hold, last valid sample is fine.
+                        avg_rot = self.calib_samples_rot[-1] 
+                        
                         self.origin_hand_pos = avg_pos
+                        self.origin_hand_rot = avg_rot
+                        
                         self.state = STATE_ACTIVE
-                        self.get_logger().info(f"Calibration Done. Origin: {avg_pos}")
+                        self.get_logger().info(f"Calibration Done. Origin Pos: {avg_pos}")
                     else:
                         # Failed (No samples?) -> Back to Waiting
                         self.state = STATE_WAITING
@@ -145,11 +156,19 @@ class DexTelNode(Node):
                 ui_color = (0, 255, 0) # Green
                 
                 if state:
-                    # Safe check: if we lost tracking for a bit, hold last or home? 
-                    # For now, if state exists, map it.
-                    diff = state.position - self.origin_hand_pos     
-                    target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
-                    target_rot_rob = state.orientation
+                    # --- Position: Relative ---
+                    diff_pos = state.position - self.origin_hand_pos     
+                    target_pos_rob = self.robot_home_pos + (diff_pos * self.movement_scale)
+                    
+                    # --- Orientation: Relative ---
+                    # Compute rotation delta: R_delta = R_current @ R_origin.T
+                    # This represents "How much has the hand rotated since calibration?"
+                    R_delta = state.orientation @ self.origin_hand_rot.T
+                    
+                    # Apply delta to Robot Home
+                    # R_target = R_delta @ R_home_rot
+                    # This means "Rotate robot from Home by the same amount hand rotated from Origin"
+                    target_rot_rob = R_delta @ self.robot_home_rot
                     
                     q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
                     
@@ -166,9 +185,6 @@ class DexTelNode(Node):
                     gripper_val = 0.8 if state.is_pinched else 0.0
                 else:
                     # Lost hand in Active mode? 
-                    # Option A: Hold last position (don't publish new, just hold q_filtered)
-                    # Option B: Go Home? 
-                    # Let's Hold Last Posed (by not updating publish_dof from q_filtered unless filtered exists)
                     if self.q_filtered is not None:
                         publish_dof = self.q_filtered
                     else:
