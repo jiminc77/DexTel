@@ -101,8 +101,6 @@ class RetargetingWrapper:
             return frame.translation.copy(), frame.rotation.copy()
         else:
             print("[ERR] 'tool0' frame not found in URDF!")
-        else:
-            print("[ERR] 'tool0' frame not found in URDF!")
             return np.zeros(3), np.eye(3)
 
     def reset_state(self, q: np.ndarray):
