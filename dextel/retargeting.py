@@ -54,6 +54,25 @@ class RetargetingWrapper:
         target_origin_link_names = ["ur3e_base_link", "tool0", "tool0"]
         target_task_link_names = ["tool0", "tool0_z", "tool0_y"]
         
+        # Indices are not strictly used in the logic we rely on (direct retargeting), 
+        # but required by init. Passing dummy indices.
+        # VectorOptimizer expects shape (2, N_vectors)
+        dummy_indices = np.zeros((2, 3), dtype=int)
+
+        self.optimizer = VectorOptimizer(
+            robot=robot,
+            target_joint_names=robot.dof_joint_names,
+            target_origin_link_names=target_origin_link_names,
+            target_task_link_names=target_task_link_names,
+            target_link_human_indices=dummy_indices,
+            scaling=1.0
+        )
+        
+        self.retargeting = SeqRetargeting(
+            optimizer=self.optimizer,
+            has_joint_limits=True
+        )
+        
         self.vector_scale = 0.1 # Must match the injection offset
         
     def solve(self, target_pos, target_rot):
