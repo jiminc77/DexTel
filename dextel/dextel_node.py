@@ -190,7 +190,10 @@ class DexTelNode(Node):
                     else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
                     
                     publish_dof = self.q_filtered
-                    gripper_val = 0.8 if state.is_pinched else 0.0
+                    
+                    # Logic: Pinched -> Close (0.0), Open -> 0.025
+                    # User confirmed 0.025 is Open.
+                    gripper_val = 0.0 if state.is_pinched else 0.025
                 else:
                     # Lost hand in Active mode? 
                     if self.q_filtered is not None:
