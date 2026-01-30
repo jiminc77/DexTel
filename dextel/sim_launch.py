@@ -29,6 +29,7 @@ import omni.graph.core as og
 from omni.isaac.core import World
 from omni.isaac.core.utils.stage import open_stage
 from omni.isaac.core.robots import Robot
+from pxr import Usd, UsdPhysics, Sdf
 
 def create_ros2_bridge_graph():
     """Creates the OmniGraph for ROS 2 communication."""
@@ -159,65 +160,55 @@ def main():
         # We need to set them to be position controlled (high stiffness)
         # This requires using the Articulation API from the robot object
         
-        if hasattr(robot, "dof_names"):
-            joint_names = robot.dof_names
-            # Robust Gripper Detection: Look for common keywords
-            gripper_keywords = ["Slider", "finger", "drive", "hand"]
-            gripper_indices = [i for i, n in enumerate(joint_names) if any(k in n for k in gripper_keywords) and "shoulder" not in n and "wrist" not in n and "elbow" not in n]
+        # --- Robust USD DriveAPI Configuration ---
+        # Instead of runtime gains (which can be flaky), we set the Drive properties directly on the USD Prims.
+        
+        stage = omni.usd.get_context().get_stage()
+        robot_prim_path = "/World/ur3e"
+        robot_prim = stage.GetPrimAtPath(robot_prim_path)
+        
+        if robot_prim.IsValid():
+            print(f"[DexTel] Scanning for Gripper Joints in {robot_prim_path} to apply DriveAPI...")
             
-            if gripper_indices:
-                print(f"[DexTel] Configuring Gripper Joints at indices: {gripper_indices} ({[joint_names[i] for i in gripper_indices]})")
-                
-                if hasattr(robot, "_articulation_view"):
-                    try:
-                        # 1. Get Current Gains (shape: [num_envs, num_dof])
-                        # This ensures we don't zero-out the arm stiffness
-                        current_kps, current_kds = robot._articulation_view.get_gains()
+            gripper_keywords = ["Slider", "finger", "drive", "hand"]
+            exclude_keywords = ["shoulder", "elbow", "wrist"]
+            
+            count = 0
+            for prim in Usd.PrimRange(robot_prim):
+                if prim.IsA(UsdPhysics.Joint):
+                    name = prim.GetName()
+                    
+                    is_gripper = any(k in name for k in gripper_keywords) and \
+                                 not any(k in name for k in exclude_keywords)
+                                 
+                    if is_gripper:
+                        print(f"[DexTel] Found Gripper Joint Prim: {name}")
                         
-                        # 2. Prepare New Gains (Handle Tensor vs Numpy)
-                        if hasattr(current_kps, 'cpu'): # Torch Tensor
-                            new_kps = current_kps.clone()
-                            new_kds = current_kds.clone()
-                            # Ensure we write to the first env (row 0)
-                            new_kps[0, gripper_indices] = 1.0e4
-                            new_kds[0, gripper_indices] = 1.0e3
-                        else: # Numpy
-                            new_kps = np.copy(current_kps)
-                            new_kds = np.copy(current_kds)
-                            # Handle shape (num_envs, num_dof) or (num_dof,)
-                            if new_kps.ndim == 2:
-                                new_kps[0, gripper_indices] = 1.0e4
-                                new_kds[0, gripper_indices] = 1.0e3
-                            else:
-                                new_kps[gripper_indices] = 1.0e4
-                                new_kds[gripper_indices] = 1.0e3
-
-                        # 3. Apply Full Array
-                        robot._articulation_view.set_gains(kps=new_kps, kds=new_kds)
-                        print(f"[DexTel] Successfully updated gains. Gripper stiffened (1.0e4). Arm preserved.")
+                        # Determine Drive Type: Prismatic -> linear, Revolute -> angular
+                        # Default to angular if unsure, but checking type is better
+                        drive_type = "angular"
+                        if prim.IsA(UsdPhysics.PrismaticJoint):
+                            drive_type = "linear"
+                            
+                        # Apply Drive API
+                        # The API schema is applied to the prim with a specific instance name (drive_type)
+                        drive_api = UsdPhysics.DriveAPI.Apply(prim, drive_type)
                         
-                        # Debug Print
-                        if hasattr(new_kps, 'cpu'):
-                            print(f"[DexTel] Active Kps: {new_kps[0].cpu().numpy()}")
-                        else:   
-                            print(f"[DexTel] Active Kps: {new_kps if new_kps.ndim==1 else new_kps[0]}")
-
-                    except Exception as e:
-                        print(f"[DexTel] Error updating gains via view: {e}")
-                        print(f"[DexTel] Attempting fallback (blind set)...")
-                        # Fallback: Create generic array (Risky for arm, but gripper works)
-                        kps = np.ones(robot.num_dof) * 4000.0 # Moderate for arm
-                        kds = np.ones(robot.num_dof) * 100.0
-                        # Overkill for gripper
-                        kps[gripper_indices] = 10000.0
-                        kds[gripper_indices] = 1000.0
-                        robot._articulation_view.set_gains(kps=kps, kds=kds)
-                else:
-                    print("[DexTel] [WARN] Could not set gains: _articulation_view not found.")
+                        # Set Properties for Position Control (Stiff)
+                        # We use a very high stiffness to ensure it holds position
+                        drive_api.CreateStiffnessAttr(1.0e5)
+                        drive_api.CreateDampingAttr(1.0e4)
+                        
+                        print(f"    -> Applied {drive_type} DriveAPI: Stiffness=1.0e5, Damping=1.0e4")
+                        count += 1
+            
+            if count == 0:
+                print("[DexTel] [WARN] No gripper joints found to configure via USD.")
             else:
-                 print("[DexTel] [WARN] No gripper joints found with keywords: 'Slider', 'finger', 'drive', 'hand'. Gripper might dangle.")
+                print(f"[DexTel] Successfully configured {count} gripper joints via USD DriveAPI.")
         else:
-             print("[DexTel] [WARN] robot.dof_names not found.")
+            print(f"[DexTel] [WARN] Robot prim not found at {robot_prim_path}")
+
             
     except Exception as e:
         print(f"[DexTel] Could not configure robot/gripper: {e}")
