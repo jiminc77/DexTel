@@ -47,23 +47,30 @@ class DexTelNode(Node):
 
         # --- Relative Mapping Components ---
         self.origin_hand_pos = None  # Position of hand when 'R' was pressed
-        # Robot Home Position: Comfortable center of workspace
-        # X: 0.4 (Forward), Y: 0.0 (Center), Z: 0.3 (Up)
-        self.robot_home_pos = np.array([0.4, 0.0, 0.3]) 
-        self.relative_mode_active = False
         
-        # Scaling Factor (Optional: 1.0 = 1:1 movement)
-        self.movement_scale = 1.0
+        # User-defined Home Configuration (Joint Space)
+        # base, shoulder_lift, elbow, w1, w2, w3
+        self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
+        self.robot_home_pos = None
+        self.robot_home_rot = None
+        
+        self.relative_mode_active = False
+        self.movement_scale = 1.5 # Slightly amplified movement for ease
 
     def control_loop(self):
+        # Initialize Home Pose via FK if not set (requires retargeting to be ready)
+        if self.robot_home_pos is None and self.retargeting_enabled:
+            pos, rot = self.retargeting.compute_fk(self.home_joints)
+            self.robot_home_pos = pos
+            self.robot_home_rot = rot
+            self.get_logger().info(f"Home Pose Computed: {pos}")
+
         img, state = self.tracker.process_frame()
         
         if img is None:
             self.get_logger().warn("No image from tracker.")
             return
 
-        fps = 0.0 
-        
         # --- Handle User Input (for Reset) ---
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
@@ -80,21 +87,24 @@ class DexTelNode(Node):
         target_pos_rob = None
         target_rot_rob = None
 
-        if state and self.retargeting_enabled:
-            # --- 1. Position Mapping Logic ---
+        if state and self.retargeting_enabled and self.robot_home_pos is not None:
+            # --- 1. Position Mapping Logic (Relative) ---
             if self.relative_mode_active and self.origin_hand_pos is not None:
-                # Relative Mode: Robot Home + (Current Hand - Origin Hand)
+                # Delta from Hand Origin
                 diff = state.position - self.origin_hand_pos
+                
+                # Apply to Robot Home
                 target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
             else:
-                # Absolute Mode (Legacy/Fallback)
-                # Keep original behavior (Hand position directly mapped + fixed offset in tracker)
-                # Note: The tracker currently outputs a position that ALREADY includes an offset [0.3, -0.1, 0.2]
-                # To make this clean, we should probably stick to one logic. 
-                # Ideally, the tracker shouldn't add offsets if we do it here, but let's accept tracker output for absolute.
+                # Fallback: Absolute mapping
                 target_pos_rob = state.position 
             
             # --- 2. Orientation Mapping Logic ---
+            # Ideally, relative orientation could also be applied (Delta Rotation),
+            # but usually absolute orientation feels more natural for teleop.
+            # We will use the absolute orientation from the tracker but maybe align it 
+            # so that "neutral hand" = "home rotation".
+            # For now, let's keep absolute orientation to avoid confusion.
             target_rot_rob = state.orientation
             
             # --- 3. Solve IK ---

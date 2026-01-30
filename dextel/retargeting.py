@@ -74,3 +74,17 @@ class RetargetingWrapper:
         except Exception as e:
             print(f"[ERR] Retargeting failed: {e}")
             return np.zeros(6)
+
+    def compute_fk(self, q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Computes the Forward Kinematics for the given joint configuration.
+        Returns the position (xyz) and rotation matrix (3x3) of the end-effector (tool0).
+        """
+        pin.forwardKinematics(self.optimizer.robot.model, self.optimizer.robot.data, q)
+        pin.updateFramePlacements(self.optimizer.robot.model, self.optimizer.robot.data)
+        
+        # 'tool0' is the target frame used in optimization
+        frame_id = self.optimizer.robot.model.getFrameId("tool0")
+        frame = self.optimizer.robot.data.oMf[frame_id]
+        
+        return frame.translation.copy(), frame.rotation.copy()
