@@ -72,13 +72,6 @@ class RetargetingWrapper:
         
         # Add regularization to prevent twisting (redundant joints drifting)
         # Damping towards zero (or current pose in SeqRetargeting?)
-        try:
-             # BasicOptimizer allows setting joint weight
-             # This pulls joints towards 0 by default, stabilizing the null space.
-             self.optimizer.set_joint_parameter(weight=0.1) 
-             print("[INFO] Joint Regularization Enabled (weight=0.1)")
-        except Exception as e:
-             print(f"[WARN] Could not set joint regularization: {e}")
         
         # --- CRITICAL: CLAMP BASE JOINT TO PREVENT FLIP ---
         # The UR3e base can rotate 360, but for teleop we want to stay "Front Facing"

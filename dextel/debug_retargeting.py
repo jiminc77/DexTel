@@ -44,6 +44,46 @@ def main():
 
     home_joints = np.array([0.0, -1.5708, -1.5708, -1.5708, 1.5708, 0.0])
     
+    print("\n--- Manual Vector Logic Verification (HOME) ---")
+    scale = wrapper.vector_scale
+    print(f"Vector Scale: {scale}")
+    
+    # 1. Compute FK Targets from Home
+    t_pos, t_rot = wrapper.compute_fk(home_joints)
+    t_vec_z = t_rot[:, 2] * scale
+    t_vec_y = t_rot[:, 1] * scale
+    print(f"Target Pos: {t_pos}")
+    print(f"Target Vec Z: {t_vec_z}")
+    print(f"Target Vec Y: {t_vec_y}")
+    
+    # 2. Compute Robot Vectors at Home
+    model = wrapper.optimizer.robot.model
+    data = wrapper.optimizer.robot.data
+    pin.forwardKinematics(model, data, home_joints)
+    pin.updateFramePlacements(model, data)
+    
+    def get_p(name):
+        return data.oMf[model.getFrameId(name)].translation
+        
+    p_base = get_p("ur3e_base_link")
+    p_tool0 = get_p("tool0")
+    p_tool0_z = get_p("tool0_z")
+    p_tool0_y = get_p("tool0_y")
+    
+    # Replicate VectorOptimizer Logic: current = task - origin
+    # Pair 0: Base -> Tool0 ? No. Check indices.
+    # Logic: indices are [0, 1, 2].
+    # Task Links: tool0, tool0_z, tool0_y
+    # Origin Links: ur3e_base_link, tool0, tool0
+    
+    rob_vec_0 = p_tool0 - p_base
+    rob_vec_1 = p_tool0_z - p_tool0
+    rob_vec_2 = p_tool0_y - p_tool0
+    
+    print(f"Robot Vec 0 (Pos): {rob_vec_0} | Err: {np.linalg.norm(rob_vec_0 - t_pos)}")
+    print(f"Robot Vec 1 (Z):   {rob_vec_1} | Err: {np.linalg.norm(rob_vec_1 - t_vec_z)}")
+    print(f"Robot Vec 2 (Y):   {rob_vec_2} | Err: {np.linalg.norm(rob_vec_2 - t_vec_y)}")
+
     # 1. Reset State
     print("\n--- Testing Reset State ---")
     wrapper.reset_state(home_joints)
