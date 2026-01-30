@@ -184,6 +184,20 @@ class DexTelNode(Node):
                         
                     if np.isnan(q_raw).any(): q_raw = np.zeros(6)
                     
+                    # --- SAFETY: Check for Base Flip (180 deg) ---
+                    # Sometimes IK Solver flips base (approx 3.14 rad). We must reject this.
+                    base_diff = abs(q_raw[0] - self.home_joints[0])
+                    if base_diff > 2.0: # ~115 degrees threshold
+                        self.get_logger().warn(f"[SAFETY] Base Flip Detected! Diff: {base_diff:.2f} rad. Rejecting Solution.")
+                        # Fallback: Hold last good position or Home
+                        if self.q_filtered is not None:
+                            q_raw = self.q_filtered 
+                        else:
+                            q_raw = self.home_joints
+                            
+                        # Optional: Force reset solver again to help it recover
+                        self.retargeting.reset_state(q_raw)
+                    
                     # DEBUG: Check for flip on first frame? (Optional)
                     # if self.q_filtered is None:
                     #     self.get_logger().info(f"First Active IK: {q_raw} (Home: {self.home_joints})")
