@@ -16,6 +16,16 @@ class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
         
+        # --- 1. Robot Configurations (Define FIRST) ---
+        # User-defined Home Configuration (Joint Space)
+        # base, shoulder_lift, elbow, w1, w2, w3
+        self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
+        self.robot_home_pos = None
+        self.robot_home_rot = None
+        
+        # Load Workspace Config
+        self.dextel_base = get_package_share_directory('dextel')
+        
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
         
@@ -47,12 +57,6 @@ class DexTelNode(Node):
 
         # --- Relative Mapping Components ---
         self.origin_hand_pos = None  # Position of hand when 'R' was pressed
-        
-        # User-defined Home Configuration (Joint Space)
-        # base, shoulder_lift, elbow, w1, w2, w3
-        self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
-        self.robot_home_pos = None
-        self.robot_home_rot = None
         
         self.relative_mode_active = False
         self.movement_scale = 1.5 # Slightly amplified movement for ease
