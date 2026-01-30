@@ -99,8 +99,8 @@ def main():
     print("\n--- Testing Reset State ---")
     wrapper.reset_state(home_joints)
     
-    if hasattr(wrapper.retargeting, 'last_q'):
-        print(f"Internal Last Q (Base): {wrapper.retargeting.last_q[0]}")
+    if hasattr(wrapper, 'last_q'):
+        print(f"Internal Last Q (Base): {wrapper.last_q[0]}")
     
     # Test Direct Optimizer (Bypass Sequence Wrapper)
     print("\n--- Testing Direct Optimizer (Bypass Seq) ---")

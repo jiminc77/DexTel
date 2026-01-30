@@ -175,38 +175,6 @@ class RetargetingWrapper:
         Resets the internal state (warm start) of the IK solver.
         """
         # q should be 6D (optimized joints only).
-        # compute_fk handles padding internally for Pinocchio.
-             
-        # Reset SeqRetargeting internal state
-        if hasattr(self.retargeting, 'last_q'):
-            self.retargeting.last_q = q
-        
-        # Perform a "Warm Up" solve to ensure optimizer internal state is synced
-        # 1. Compute FK for the reset q
-        pos, rot = self.compute_fk(q)
-        
-        # 2. Construct Target Vectors
-        v_approach = rot[:, 2] # Z
-        v_normal = rot[:, 1]   # Y
-        
-        target_vecs = np.vstack([
-            pos,
-            v_approach * self.vector_scale,
-            v_normal * self.vector_scale
-        ])
-        
-        # 3. Force Retarget
-        try:
-             # Force warm start with q
-             # Note: SeqRetargeting.retarget might ignore warm_start if not explicitly supported in all versions,
-             # but usually it uses self.last_q. We set self.last_q above.
-             # We run it to update any other internal history.
-            _ = self.retargeting.retarget(
-                ref_value=target_vecs,
-                fixed_qpos=self.fixed_qpos
-            )
-            
-            # Re-enforce last_q just in case the solve moved it slightly (it shouldn't if q is exact solution)
-            self.retargeting.last_q = q
-        except Exception as e:
-            print(f"[ERR] Reset State Warmup Failed: {e}")
+        self.last_q = q
+        # Optional: Reset filter if it exists (Not implemented yet)
+        print(f"[INFO] Retargeting State Reset to: {q[:6]}")
