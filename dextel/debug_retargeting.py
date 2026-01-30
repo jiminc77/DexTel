@@ -55,7 +55,12 @@ def main():
     
     diff = np.linalg.norm(q_sol - home_joints)
     print(f"Diff Norm (Joint Space): {diff}")
-    print(f"Base Joint: {q_sol[0]} (Expected: {home_joints[0]})")
+    
+    joint_names = ["Base", "Shoulder", "Elbow", "Wrist1", "Wrist2", "Wrist3"]
+    print("\n--- Detailed Joint Analysis ---")
+    for i in range(6):
+        d = q_sol[i] - home_joints[i]
+        print(f"{joint_names[i]:<10}: Sol={q_sol[i]:6.3f} | Home={home_joints[i]:6.3f} | Diff={d:6.3f} ({np.rad2deg(d):6.1f} deg)")
     
     # Verify FK of solution
     sol_pos, sol_rot = wrapper.compute_fk(q_sol)
@@ -63,11 +68,14 @@ def main():
     rot_err = np.linalg.norm(sol_rot - rot) # Frobenious norm approx
     
     print(f"\nFK Verification:")
-    print(f"Pos Error: {pos_err}")
-    print(f"Rot Error: {rot_err}")
+    print(f"Pos Error: {pos_err:.6f}")
+    print(f"Rot Error: {rot_err:.6f}")
     
+    # Updated Check (Base clamp fixed the flip, now checking for twist)
     if abs(q_sol[0] - home_joints[0]) > 2.0:
-        print("!!! FLIP DETECTED !!!")
+        print("!!! BASE FLIP DETECTED !!!")
+    elif diff > 0.5:
+        print("!!! TWIST DETECTED (High Joint Diff) !!!")
     else:
         print("Solution OK.")
 
