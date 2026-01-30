@@ -59,7 +59,13 @@ def main():
     # 2. Compute Robot Vectors at Home
     model = wrapper.optimizer.robot.model
     data = wrapper.optimizer.robot.data
-    pin.forwardKinematics(model, data, home_joints)
+    
+    # Pad for Pinocchio
+    nq = model.nq
+    q_padded = np.zeros(nq)
+    q_padded[:len(home_joints)] = home_joints
+    
+    pin.forwardKinematics(model, data, q_padded)
     pin.updateFramePlacements(model, data)
     
     def get_p(name):
