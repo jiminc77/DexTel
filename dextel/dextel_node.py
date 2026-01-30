@@ -77,61 +77,69 @@ class DexTelNode(Node):
             rclpy.shutdown()
             return
         elif key & 0xFF == ord('r'):
+            self.relative_mode_active = True
+            self.q_filtered = None  # Force Snap / Reset Filter
+            
             if state is not None:
-                self.origin_hand_pos = state.position  # Capture current hand pos as origin
-                self.relative_mode_active = True
-                
-                # Force Snap: Reset smoothing filter to avoid "gliding" back to home
-                self.q_filtered = None 
-                
-                self.get_logger().info("Relative Mode RESET. Hand Origin Set. Snapping to Home.")
+                self.origin_hand_pos = state.position
+                self.get_logger().info("RESET: Origin Set. Snapping to Home.")
             else:
-                 self.get_logger().info("Cannot reset: No hand detected.")
+                self.origin_hand_pos = None
+                self.get_logger().info("RESET: No Hand. Going to Home & Waiting...")
         
-        target_pos_rob = None
-        target_rot_rob = None
+        # --- Control Logic ---
+        publish_dof = None # Joints to publish (if any)
+        gripper_val = 0.0  # Default Open
 
-        if state and self.retargeting_enabled and self.robot_home_pos is not None:
-            # --- 1. Position Mapping Logic (Relative) ---
-            if self.relative_mode_active and self.origin_hand_pos is not None:
-                # Delta from Hand Origin
-                diff = state.position - self.origin_hand_pos
+        if self.retargeting_enabled:
+            
+            if state:
+                # [Case 1] Hand Detected
                 
-                # Apply to Robot Home
-                target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
-            else:
-                # Fallback: Absolute mapping
-                target_pos_rob = state.position 
-            
-            # --- 2. Orientation Mapping Logic ---
-            # Ideally, relative orientation could also be applied (Delta Rotation),
-            # but usually absolute orientation feels more natural for teleop.
-            # We will use the absolute orientation from the tracker but maybe align it 
-            # so that "neutral hand" = "home rotation".
-            # For now, let's keep absolute orientation to avoid confusion.
-            target_rot_rob = state.orientation
-            
-            # --- 3. Solve IK ---
-            q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
-            
-            # Simple NaN check
-            if np.isnan(q_raw).any():
-                q_raw = np.zeros(6) # Fallback
+                # If we were waiting for a hand (Origin is None), latch it now
+                if self.relative_mode_active and self.origin_hand_pos is None:
+                     self.origin_hand_pos = state.position
+                     self.q_filtered = None # Ensure clean start
+                     self.get_logger().info("Hand Detected! Origin Latched.")
                 
-            # Smoothing (EMA)
-            if self.q_filtered is None:
-                self.q_filtered = q_raw
-            else:
-                self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
+                # --- Position Mapping ---
+                target_pos_rob = None
                 
-            q_sol = self.q_filtered
-            
-            # Gripper Logic
-            grip_open = 0.0 # Open
-            grip_closed = 0.8 # Closed/Pinched
-            grip_pos = grip_closed if state.is_pinched else grip_open
+                if self.relative_mode_active and self.origin_hand_pos is not None:
+                    # Relative: Home + (Hand - Origin)
+                    diff = state.position - self.origin_hand_pos
+                    target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
+                else:
+                    # Absolute
+                    target_pos_rob = state.position
+                
+                # --- Orientation Mapping ---
+                target_rot_rob = state.orientation
+                
+                # --- Solve IK ---
+                q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
+                if np.isnan(q_raw).any(): q_raw = np.zeros(6)
+                
+                # --- Smoothing ---
+                if self.q_filtered is None:
+                    self.q_filtered = q_raw
+                else:
+                    self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
+                
+                publish_dof = self.q_filtered
+                
+                # Gripper
+                gripper_val = 0.8 if state.is_pinched else 0.0
+                
+            elif self.relative_mode_active and self.origin_hand_pos is None:
+                # [Case 2] No Hand, but Reset Active (Waiting) -> Hold Home
+                # We use the predetermined home joints directly to ensure exact pose
+                publish_dof = self.home_joints
+                self.q_filtered = publish_dof # Keep filter synced
+                gripper_val = 0.0 # Force Open while waiting
 
-            # Combined Message (Arm + Gripper)
+        # --- Publish if we have a target ---
+        if publish_dof is not None:
             joint_msg = JointState()
             joint_msg.header.stamp = self.get_clock().now().to_msg()
             joint_msg.name = [
@@ -139,18 +147,15 @@ class DexTelNode(Node):
                 "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
                 "Slider_1", "Slider_2"
             ]
-            # Combine arm solution and gripper positions
-            # q_sol includes helper joints, so we take the first 6 (arm joints)
-            joint_msg.position = q_sol[:6].tolist() + [grip_pos, grip_pos]
+            # Arm (6) + Gripper (2)
+            # Ensure publish_dof is list/array of 6
+            joint_msg.position = list(publish_dof[:6]) + [gripper_val, gripper_val]
             joint_msg.velocity = [0.0] * 8
             joint_msg.effort = [0.0] * 8
             
             self.pub_joints.publish(joint_msg)
             
         if state:
-            # Pass mapping info to UI
-            # We can hijack 'fps' argument or add a new one, but let's stick to modifying the overlay function signature properly later.
-            # For now, just pass 0.0 or actual if calculated.
             is_relative = self.relative_mode_active
             draw_ui_overlay(img, state, 0.0, is_relative)
             
