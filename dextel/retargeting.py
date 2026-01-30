@@ -7,7 +7,7 @@ from dex_retargeting.seq_retarget import SeqRetargeting
 from typing import Optional
 
 class RetargetingWrapper:
-    def __init__(self, urdf_path: str):
+    def __init__(self, urdf_path):
         if not os.path.exists(urdf_path):
             print(f"[WARN] URDF not found at {urdf_path}. Retargeting will fail.")
             
@@ -45,7 +45,7 @@ class RetargetingWrapper:
         
         self.vector_scale = 0.1 # The offset distance used in URDF for tool0_z and tool0_y
         
-    def solve(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
+    def solve(self, target_pos, target_rot):
         # target_rot columns are X, Y, Z axes
         v_approach = target_rot[:, 2] # Z axis
         v_normal = target_rot[:, 1]   # Y axis
@@ -75,7 +75,7 @@ class RetargetingWrapper:
             print(f"[ERR] Retargeting failed: {e}")
             return np.zeros(6)
 
-    def compute_fk(self, q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def compute_fk(self, q):
         """
         Computes the Forward Kinematics for the given joint configuration.
         Returns the position (xyz) and rotation matrix (3x3) of the end-effector (tool0).
