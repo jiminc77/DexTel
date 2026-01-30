@@ -152,6 +152,11 @@ class DexTelNode(Node):
                     target_rot_rob = state.orientation
                     
                     q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
+                    
+                    # Ensure shape (6,) for arm joints
+                    if q_raw.shape[0] > 6:
+                        q_raw = q_raw[:6]
+                        
                     if np.isnan(q_raw).any(): q_raw = np.zeros(6)
                     
                     if self.q_filtered is None: self.q_filtered = q_raw
