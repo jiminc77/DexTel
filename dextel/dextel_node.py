@@ -20,6 +20,9 @@ class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
         
+        # Enable Resizable Window
+        cv2.namedWindow("DexTel Control", cv2.WINDOW_NORMAL)
+        
         # [base, shoulder_lift, elbow, wrist1, wrist2, wrist3]
         self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
         self.robot_home_pos = None

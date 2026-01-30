@@ -385,61 +385,97 @@ def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tup
     h, w = image.shape[:2]
     overlay = image.copy()
     
+    # Base Resolution: 480p
+    # Scale All UI elements relative to height
+    s = h / 480.0
+    
+    # Helper for scaled int
+    def si(v): return int(v * s)
+    # Helper for font scale
+    def sf(v): return v * s 
+    
     # --- Backgrounds (Overlay) ---
     
     # 1. Top Status Bar
-    cv2.rectangle(overlay, (0, 0), (w, 50), (10, 10, 10), -1)
+    bar_h = si(50)
+    cv2.rectangle(overlay, (0, 0), (w, bar_h), (10, 10, 10), -1)
     
     if state:
         # 2. Info Panel
-        cv2.rectangle(overlay, (20, h-140), (220, h-20), (20, 20, 20), -1)
+        panel_w, panel_h = si(200), si(120)
+        margin = si(20)
+        cv2.rectangle(overlay, (margin, h - panel_h - margin), (margin + panel_w, h - margin), (20, 20, 20), -1)
         
         # 4. Orientation Info (RPY)
-        cv2.rectangle(overlay, (w-200, h-140), (w-20, h-60), (20, 20, 20), -1)
+        cv2.rectangle(overlay, (w - panel_w - margin, h - panel_h - margin), (w - margin, h - margin), (20, 20, 20), -1)
 
     # Apply Transparency (Single Blend)
-    # 0.3 Overlay (Dark) + 0.7 Image = Light Transparency (Fixes accumulating darkness)
     cv2.addWeighted(overlay, 0.3, image, 0.7, 0, image)
     
     # --- Content (Text & Graphics) ---
     
     font = cv2.FONT_HERSHEY_DUPLEX
-    cv2.putText(image, "DexTel", (20, 35), font, 0.8, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(image, status_text, (140, 35), font, 0.6, status_color, 1, cv2.LINE_AA)
+    # DexTel Title
+    cv2.putText(image, "DexTel", (si(20), si(35)), font, sf(0.8), (255, 255, 255), si(1), cv2.LINE_AA)
+    # Status Text
+    cv2.putText(image, status_text, (si(140), si(35)), font, sf(0.6), status_color, si(1), cv2.LINE_AA)
     
     if state:
-        # Grip Status Indicator (Solid)
+        # Grip Status Indicator
         status = "GRIPPED" if state.is_pinched else "RELEASED"
         col = (0, 200, 100) if state.is_pinched else (200, 200, 200)
         
-        cv2.rectangle(image, (w-150, 10), (w-20, 40), col, -1)
-        ts = cv2.getTextSize(status, font, 0.6, 1)[0]
-        cv2.putText(image, status, (w-85-ts[0]//2, 25+ts[1]//2), font, 0.6, (0,0,0), 1)
+        grip_box_w = si(130)
+        grip_box_h = si(30)
+        grip_margin = si(20)
+        
+        box_tl = (w - grip_box_w - grip_margin, si(10))
+        box_br = (w - grip_margin, si(10) + grip_box_h)
+        
+        cv2.rectangle(image, box_tl, box_br, col, -1)
+        
+        ts = cv2.getTextSize(status, font, sf(0.6), si(1))[0]
+        # Center text in box
+        text_x = box_tl[0] + (grip_box_w - ts[0]) // 2
+        text_y = box_tl[1] + (grip_box_h + ts[1]) // 2
+        cv2.putText(image, status, (text_x, text_y), font, sf(0.6), (0,0,0), si(1))
     
-        # Info Text
-        cv2.putText(image, "POSITION", (30, h-110), font, 0.5, (150, 150, 150), 1)
-        cv2.putText(image, f"X {state.position[0]:.3f}", (30, h-85), font, 0.6, (255,255,255), 1)
-        cv2.putText(image, f"Y {state.position[1]:.3f}", (30, h-60), font, 0.6, (255,255,255), 1)
-        cv2.putText(image, f"Z {state.position[2]:.3f}", (30, h-35), font, 0.6, (255,255,255), 1)
+        # Info Panel Text
+        # Base Y for info panel
+        info_y_base = h - panel_h - margin + si(30)
+        line_step = si(25)
+        
+        cv2.putText(image, "POSITION", (margin + si(10), info_y_base), font, sf(0.5), (150, 150, 150), si(1))
+        cv2.putText(image, f"X {state.position[0]:.3f}", (margin + si(10), info_y_base + line_step), font, sf(0.6), (255,255,255), si(1))
+        cv2.putText(image, f"Y {state.position[1]:.3f}", (margin + si(10), info_y_base + line_step*2), font, sf(0.6), (255,255,255), si(1))
+        cv2.putText(image, f"Z {state.position[2]:.3f}", (margin + si(10), info_y_base + line_step*3), font, sf(0.6), (255,255,255), si(1))
         
         # Pinch Bar
-        cx, cy, cw = w//2, h-30, 300
-        cv2.line(image, (cx-cw//2, cy), (cx+cw//2, cy), (100,100,100), 4) # Rail
+        # Center bottom
+        bar_w = si(300)
+        cx, cy = w // 2, h - si(30)
+        
+        cv2.line(image, (cx - bar_w//2, cy), (cx + bar_w//2, cy), (100,100,100), si(4)) # Rail
         
         rmax = 0.15
         for thresh, c in [(PINCH_CLOSE_THRESH, (0,0,255)), (PINCH_OPEN_THRESH, (0,255,0))]:
-            off = int((thresh/rmax)*cw)
-            cv2.line(image, (cx-cw//2+off, cy-8), (cx-cw//2+off, cy+8), c, 2)
+            off = int((thresh/rmax) * bar_w)
+            # Center is -bar_w/2, so offset acts from left
+            # Actual x = (cx - bar_w/2) + off
+            x_line = cx - bar_w//2 + off
+            cv2.line(image, (x_line, cy - si(8)), (x_line, cy + si(8)), c, si(2))
             
-        val_off = int((min(state.pinch_dist, rmax)/rmax)*cw)
-        cv2.circle(image, (cx-cw//2+val_off, cy), 8, (0,255,255), -1)
+        val_off = int((min(state.pinch_dist, rmax)/rmax) * bar_w)
+        cv2.circle(image, (cx - bar_w//2 + val_off, cy), si(8), (0,255,255), -1)
 
         # Orientation Text
+        orient_x_base = w - panel_w - margin + si(10)
+        
         r_deg = np.degrees(state.rpy)
-        cv2.putText(image, "RAW ORIENTATION", (w-190, h-110), font, 0.5, (150, 150, 150), 1)
-        cv2.putText(image, f"R {r_deg[0]:.0f}", (w-190, h-85), font, 0.6, (255,255,255), 1)
-        cv2.putText(image, f"P {r_deg[1]:.0f}", (w-130, h-85), font, 0.6, (255,255,255), 1)
-        cv2.putText(image, f"Y {r_deg[2]:.0f}", (w-70, h-85), font, 0.6, (255,255,255), 1)
+        cv2.putText(image, "RAW ORIENTATION", (orient_x_base, info_y_base), font, sf(0.5), (150, 150, 150), si(1))
+        cv2.putText(image, f"R {r_deg[0]:.0f}", (orient_x_base, info_y_base + line_step), font, sf(0.6), (255,255,255), si(1))
+        cv2.putText(image, f"P {r_deg[1]:.0f}", (orient_x_base + si(60), info_y_base + line_step), font, sf(0.6), (255,255,255), si(1))
+        cv2.putText(image, f"Y {r_deg[2]:.0f}", (orient_x_base + si(120), info_y_base + line_step), font, sf(0.6), (255,255,255), si(1))
 
 def rotationMatrixToEulerAngles(R):
     sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
