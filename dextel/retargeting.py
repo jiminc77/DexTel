@@ -26,17 +26,17 @@ class RetargetingWrapper:
             parent_joint = tool0_frame.parent
             parent_placement = tool0_frame.placement # Transform from Joint to tool0
             
-            # tool0_z: 0.1m along Z of tool0
+            # tool0_z: 0.5m along Z of tool0
             d_z = pin.SE3.Identity()
-            d_z.translation = np.array([0.0, 0.0, 0.1])
+            d_z.translation = np.array([0.0, 0.0, 0.5])
             placement_z = parent_placement * d_z
             
             frame_z = pin.Frame("tool0_z", parent_joint, tool0_id, placement_z, pin.FrameType.OP_FRAME)
             model.addFrame(frame_z)
             
-            # tool0_y: 0.1m along Y of tool0
+            # tool0_y: 0.5m along Y of tool0
             d_y = pin.SE3.Identity()
-            d_y.translation = np.array([0.0, 0.1, 0.0])
+            d_y.translation = np.array([0.0, 0.5, 0.0])
             placement_y = parent_placement * d_y
             
             frame_y = pin.Frame("tool0_y", parent_joint, tool0_id, placement_y, pin.FrameType.OP_FRAME)
@@ -48,8 +48,8 @@ class RetargetingWrapper:
         
         # Define links for vector optimization
         # 1. Position: Base -> Tool0
-        # 2. Orientation Z: Tool0 -> Tool0_Z (Offset 0.1m along Z)
-        # 3. Orientation Y: Tool0 -> Tool0_Y (Offset 0.1m along Y)
+        # 2. Orientation Z: Tool0 -> Tool0_Z
+        # 3. Orientation Y: Tool0 -> Tool0_Y
         
         target_origin_link_names = ["ur3e_base_link", "tool0", "tool0"]
         target_task_link_names = ["tool0", "tool0_z", "tool0_y"]
@@ -85,7 +85,7 @@ class RetargetingWrapper:
             has_joint_limits=True
         )
         
-        self.vector_scale = 0.1 # Must match the injection offset
+        self.vector_scale = 0.5 # Updated to mismatch twist
         
     def solve(self, target_pos, target_rot):
         # target_rot columns are X, Y, Z axes
@@ -94,30 +94,22 @@ class RetargetingWrapper:
         
         # Construct target vectors matching the URDF link pairs
         # 1. Position: target_pos
-        # 2. Z vector: v_approach * scale
-        # 3. Y vector: v_normal * scale
+        # 2. Z vector: v_approach * scale (Relative dir)
+        # 3. Y vector: v_normal * scale (Relative dir)
         
         if np.isnan(target_pos).any() or np.isnan(target_rot).any():
              print(f"[ERR] Retargeting Input contains NaNs! Pos: {target_pos} Rot: {target_rot}")
              return np.zeros(6)
 
         # 2. Construct Target Vectors
-        # Important: VectorOptimizer minimizes || Pos_robot_link - Pos_target ||.
-        # So we must provide ABSOLUTE positions for the helper links too.
-        
-        # Target for tool0 -> target_pos
-        # Target for tool0_z -> target_pos + (Z_dir * scale)
-        # Target for tool0_y -> target_pos + (Y_dir * scale)
-        
-        # v_approach is Z axis direction
-        target_pos_z = target_pos + (v_approach * self.vector_scale)
-        # v_normal is Y axis direction
-        target_pos_y = target_pos + (v_normal * self.vector_scale)
+        # We are using Relative Targets because origin_link="tool0" and task_link="tool0_z".
+        # So we compare (Pos_tool0_z - Pos_tool0) with (Target_Vector_Z).
+        # Target Vector Z is just Direction * Scale.
         
         target_vecs = np.vstack([
             target_pos,
-            target_pos_z,
-            target_pos_y
+            v_approach * self.vector_scale,
+            v_normal * self.vector_scale
         ])
         
         try:
@@ -182,13 +174,10 @@ class RetargetingWrapper:
         v_approach = rot[:, 2] # Z
         v_normal = rot[:, 1]   # Y
         
-        target_pos_z = pos + (v_approach * self.vector_scale)
-        target_pos_y = pos + (v_normal * self.vector_scale)
-        
         target_vecs = np.vstack([
             pos,
-            target_pos_z,
-            target_pos_y
+            v_approach * self.vector_scale,
+            v_normal * self.vector_scale
         ])
         
         # 3. Force Retarget
