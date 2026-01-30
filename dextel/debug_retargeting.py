@@ -94,6 +94,32 @@ def main():
     print("\n--- Testing Reset State ---")
     wrapper.reset_state(home_joints)
     
+    if hasattr(wrapper.retargeting, 'last_q'):
+        print(f"Internal Last Q (Base): {wrapper.retargeting.last_q[0]}")
+    
+    # Test Direct Optimizer (Bypass Sequence Wrapper)
+    print("\n--- Testing Direct Optimizer (Bypass Seq) ---")
+    # Reconstruct target vecs
+    target_vecs = np.vstack([t_pos, t_vec_z, t_vec_y])
+    
+    try:
+        # VectorOptimizer.retarget takes (ref_value, warm_start, ...)
+        # Note: Return type might be just q, or (q, info). Check dex_retargeting signature if possible. 
+        # Usually it returns q.
+        opt_q = wrapper.optimizer.retarget(ref_value=target_vecs, warm_start=home_joints)
+        
+        dir_diff = np.linalg.norm(opt_q[:6] - home_joints)
+        print(f"Direct Opt Base: {opt_q[0]}")
+        print(f"Direct Opt Diff Norm: {dir_diff}")
+        
+        if dir_diff < 0.1:
+            print(">> Direct Optimizer SUCCEEDED. Issue is in SeqRetargeting.")
+        else:
+            print(">> Direct Optimizer FAILED. Issue is in Optimizer/Cost landscape.")
+            
+    except Exception as e:
+        print(f"Direct Opt Failed: {e}")
+
     # 2. Get Home FK
     pos, rot = wrapper.compute_fk(home_joints)
     print(f"Home Pos: {pos}")
