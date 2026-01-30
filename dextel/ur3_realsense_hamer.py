@@ -381,7 +381,7 @@ def draw_wrist_frame(image, u, v, R, axis_len=60):
     cv2.circle(image, origin, 5, (255, 255, 255), -1)
 
 
-def draw_ui_overlay(image, state: HandState, fps: float, is_relative: bool = False):
+def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tuple):
     h, w = image.shape[:2]
     overlay = image.copy()
     
@@ -392,48 +392,47 @@ def draw_ui_overlay(image, state: HandState, fps: float, is_relative: bool = Fal
     font = cv2.FONT_HERSHEY_DUPLEX
     cv2.putText(image, "DexTel", (20, 35), font, 0.8, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Mode Status
-    mode_str = "REL MODE" if is_relative else "ABS MODE (Press 'R')"
-    mode_col = (0, 255, 255) if is_relative else (100, 100, 255)
-    cv2.putText(image, mode_str, (140, 35), font, 0.6, mode_col, 1, cv2.LINE_AA)
+    # Mode Status (Dynamic)
+    cv2.putText(image, status_text, (140, 35), font, 0.6, status_color, 1, cv2.LINE_AA)
     
-    status = "GRIPPED" if state.is_pinched else "RELEASED"
-    col = (0, 200, 100) if state.is_pinched else (200, 200, 200)
-    
-    cv2.rectangle(image, (w-150, 10), (w-20, 40), col, -1)
-    ts = cv2.getTextSize(status, font, 0.6, 1)[0]
-    cv2.putText(image, status, (w-85-ts[0]//2, 25+ts[1]//2), font, 0.6, (0,0,0), 1)
-    
-    # 2. Info Panel
-    cv2.rectangle(overlay, (20, h-140), (220, h-20), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
-    
-    cv2.putText(image, "POSITION", (30, h-110), font, 0.5, (150, 150, 150), 1)
-    cv2.putText(image, f"X {state.position[0]:.3f}", (30, h-85), font, 0.6, (255,255,255), 1)
-    cv2.putText(image, f"Y {state.position[1]:.3f}", (30, h-60), font, 0.6, (255,255,255), 1)
-    cv2.putText(image, f"Z {state.position[2]:.3f}", (30, h-35), font, 0.6, (255,255,255), 1)
-    
-    # 3. Pinch Bar
-    cx, cy, cw = w//2, h-30, 300
-    cv2.line(image, (cx-cw//2, cy), (cx+cw//2, cy), (100,100,100), 4) # Rail
-    
-    rmax = 0.15
-    for thresh, col in [(PINCH_CLOSE_THRESH, (0,0,255)), (PINCH_OPEN_THRESH, (0,255,0))]:
-        off = int((thresh/rmax)*cw)
-        cv2.line(image, (cx-cw//2+off, cy-8), (cx-cw//2+off, cy+8), col, 2)
+    if state:
+        status = "GRIPPED" if state.is_pinched else "RELEASED"
+        col = (0, 200, 100) if state.is_pinched else (200, 200, 200)
         
-    val_off = int((min(state.pinch_dist, rmax)/rmax)*cw)
-    cv2.circle(image, (cx-cw//2+val_off, cy), 8, (0,255,255), -1)
-
-    # 4. Orientation Info (RPY)
-    cv2.rectangle(overlay, (w-200, h-140), (w-20, h-60), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+        cv2.rectangle(image, (w-150, 10), (w-20, 40), col, -1)
+        ts = cv2.getTextSize(status, font, 0.6, 1)[0]
+        cv2.putText(image, status, (w-85-ts[0]//2, 25+ts[1]//2), font, 0.6, (0,0,0), 1)
     
-    r_deg = np.degrees(state.rpy)
-    cv2.putText(image, "RAW ORIENTATION", (w-190, h-110), font, 0.5, (150, 150, 150), 1)
-    cv2.putText(image, f"R {r_deg[0]:.0f}", (w-190, h-85), font, 0.6, (255,255,255), 1)
-    cv2.putText(image, f"P {r_deg[1]:.0f}", (w-130, h-85), font, 0.6, (255,255,255), 1)
-    cv2.putText(image, f"Y {r_deg[2]:.0f}", (w-70, h-85), font, 0.6, (255,255,255), 1)
+        # 2. Info Panel
+        cv2.rectangle(overlay, (20, h-140), (220, h-20), (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+        
+        cv2.putText(image, "POSITION", (30, h-110), font, 0.5, (150, 150, 150), 1)
+        cv2.putText(image, f"X {state.position[0]:.3f}", (30, h-85), font, 0.6, (255,255,255), 1)
+        cv2.putText(image, f"Y {state.position[1]:.3f}", (30, h-60), font, 0.6, (255,255,255), 1)
+        cv2.putText(image, f"Z {state.position[2]:.3f}", (30, h-35), font, 0.6, (255,255,255), 1)
+        
+        # 3. Pinch Bar
+        cx, cy, cw = w//2, h-30, 300
+        cv2.line(image, (cx-cw//2, cy), (cx+cw//2, cy), (100,100,100), 4) # Rail
+        
+        rmax = 0.15
+        for thresh, col in [(PINCH_CLOSE_THRESH, (0,0,255)), (PINCH_OPEN_THRESH, (0,255,0))]:
+            off = int((thresh/rmax)*cw)
+            cv2.line(image, (cx-cw//2+off, cy-8), (cx-cw//2+off, cy+8), col, 2)
+            
+        val_off = int((min(state.pinch_dist, rmax)/rmax)*cw)
+        cv2.circle(image, (cx-cw//2+val_off, cy), 8, (0,255,255), -1)
+
+        # 4. Orientation Info (RPY)
+        cv2.rectangle(overlay, (w-200, h-140), (w-20, h-60), (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+        
+        r_deg = np.degrees(state.rpy)
+        cv2.putText(image, "RAW ORIENTATION", (w-190, h-110), font, 0.5, (150, 150, 150), 1)
+        cv2.putText(image, f"R {r_deg[0]:.0f}", (w-190, h-85), font, 0.6, (255,255,255), 1)
+        cv2.putText(image, f"P {r_deg[1]:.0f}", (w-130, h-85), font, 0.6, (255,255,255), 1)
+        cv2.putText(image, f"Y {r_deg[2]:.0f}", (w-70, h-85), font, 0.6, (255,255,255), 1)
 
 def rotationMatrixToEulerAngles(R):
     sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])

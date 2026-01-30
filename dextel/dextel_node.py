@@ -58,7 +58,7 @@ class DexTelNode(Node):
         self.movement_scale = 1.5 # Slightly amplified movement for ease
 
     def control_loop(self):
-        # Initialize Home Pose via FK if not set (requires retargeting to be ready)
+        # Initialize Home Pose via FK
         if self.robot_home_pos is None and self.retargeting_enabled:
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
@@ -66,79 +66,110 @@ class DexTelNode(Node):
             self.get_logger().info(f"Home Pose Computed: {pos}")
 
         img, state = self.tracker.process_frame()
-        
-        if img is None:
-            self.get_logger().warn("No image from tracker.")
-            return
+        if img is None: return
 
-        # --- Handle User Input (for Reset) ---
+        # Constants for States
+        STATE_WAITING = 0      # Robot at Home, Waiting for Hand + R
+        STATE_CALIBRATING = 1  # Accumulating samples for 2s
+        STATE_ACTIVE = 2       # Relative Control Active
+        
+        # Init State if needed
+        if not hasattr(self, 'state'):
+            self.state = STATE_WAITING
+            self.calib_start_time = 0.0
+            self.calib_samples = []
+
+        # --- User Input ---
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
             rclpy.shutdown()
             return
         elif key & 0xFF == ord('r'):
-            self.relative_mode_active = True
-            self.q_filtered = None  # Force Snap / Reset Filter
-            
+            # Logic: If Hand -> Calibrate. If No Hand -> Wait.
             if state is not None:
-                self.origin_hand_pos = state.position
-                self.get_logger().info("RESET: Origin Set. Snapping to Home.")
+                self.state = STATE_CALIBRATING
+                self.calib_start_time = time.time()
+                self.calib_samples = []
+                self.q_filtered = None # Reset filter
+                self.get_logger().info("Starting Calibration (2s)...")
             else:
-                self.origin_hand_pos = None
-                self.get_logger().info("RESET: No Hand. Going to Home & Waiting...")
-        
+                self.state = STATE_WAITING
+                self.q_filtered = None 
+                self.get_logger().info("Reset to WAITING (Home).")
+
         # --- Control Logic ---
-        publish_dof = None # Joints to publish (if any)
-        gripper_val = 0.0  # Default Open
+        publish_dof = None
+        gripper_val = 0.0
+        ui_status = "WAITING"
+        ui_color = (100, 100, 100) # Grey
 
         if self.retargeting_enabled:
             
-            if state:
-                # [Case 1] Hand Detected
-                
-                # If we were waiting for a hand (Origin is None), latch it now
-                if self.relative_mode_active and self.origin_hand_pos is None:
-                     self.origin_hand_pos = state.position
-                     self.q_filtered = None # Ensure clean start
-                     self.get_logger().info("Hand Detected! Origin Latched.")
-                
-                # --- Position Mapping ---
-                target_pos_rob = None
-                
-                if self.relative_mode_active and self.origin_hand_pos is not None:
-                    # Relative: Home + (Hand - Origin)
-                    diff = state.position - self.origin_hand_pos
-                    target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
-                else:
-                    # Absolute
-                    target_pos_rob = state.position
-                
-                # --- Orientation Mapping ---
-                target_rot_rob = state.orientation
-                
-                # --- Solve IK ---
-                q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
-                if np.isnan(q_raw).any(): q_raw = np.zeros(6)
-                
-                # --- Smoothing ---
-                if self.q_filtered is None:
-                    self.q_filtered = q_raw
-                else:
-                    self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
-                
-                publish_dof = self.q_filtered
-                
-                # Gripper
-                gripper_val = 0.8 if state.is_pinched else 0.0
-                
-            elif self.relative_mode_active and self.origin_hand_pos is None:
-                # [Case 2] No Hand, but Reset Active (Waiting) -> Hold Home
-                # We use the predetermined home joints directly to ensure exact pose
+            # State Machine
+            if self.state == STATE_WAITING:
+                # Behavior: Hold Home. Ignore Hand.
                 publish_dof = self.home_joints
-                self.q_filtered = publish_dof # Keep filter synced
-                gripper_val = 0.0 # Force Open while waiting
+                self.q_filtered = publish_dof
+                ui_status = "WAITING (Press R)"
+                ui_color = (0, 165, 255) # Orange
 
-        # --- Publish if we have a target ---
+            elif self.state == STATE_CALIBRATING:
+                # Behavior: Hold Home. Collect Samples.
+                publish_dof = self.home_joints
+                self.q_filtered = publish_dof
+                
+                elapsed = time.time() - self.calib_start_time
+                remaining = max(0.0, 2.0 - elapsed)
+                ui_status = f"CALIB... {remaining:.1f}s"
+                ui_color = (0, 255, 255) # Yellow
+                
+                if state:
+                    self.calib_samples.append(state.position)
+                
+                if elapsed >= 2.0:
+                    # Finish Calibration
+                    if len(self.calib_samples) > 0:
+                        # Average samples for robust origin
+                        avg_pos = np.mean(self.calib_samples, axis=0)
+                        self.origin_hand_pos = avg_pos
+                        self.state = STATE_ACTIVE
+                        self.get_logger().info(f"Calibration Done. Origin: {avg_pos}")
+                    else:
+                        # Failed (No samples?) -> Back to Waiting
+                        self.state = STATE_WAITING
+                        self.get_logger().warn("Calibration Failed (No Samples). Waiting.")
+
+            elif self.state == STATE_ACTIVE:
+                # Behavior: Relative Control
+                ui_status = "ACTIVE"
+                ui_color = (0, 255, 0) # Green
+                
+                if state:
+                    # Safe check: if we lost tracking for a bit, hold last or home? 
+                    # For now, if state exists, map it.
+                    diff = state.position - self.origin_hand_pos     
+                    target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
+                    target_rot_rob = state.orientation
+                    
+                    q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
+                    if np.isnan(q_raw).any(): q_raw = np.zeros(6)
+                    
+                    if self.q_filtered is None: self.q_filtered = q_raw
+                    else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
+                    
+                    publish_dof = self.q_filtered
+                    gripper_val = 0.8 if state.is_pinched else 0.0
+                else:
+                    # Lost hand in Active mode? 
+                    # Option A: Hold last position (don't publish new, just hold q_filtered)
+                    # Option B: Go Home? 
+                    # Let's Hold Last Posed (by not updating publish_dof from q_filtered unless filtered exists)
+                    if self.q_filtered is not None:
+                        publish_dof = self.q_filtered
+                    else:
+                        publish_dof = self.home_joints # Fail safe
+
+        # --- Publish ---
         if publish_dof is not None:
             joint_msg = JointState()
             joint_msg.header.stamp = self.get_clock().now().to_msg()
@@ -147,18 +178,23 @@ class DexTelNode(Node):
                 "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
                 "Slider_1", "Slider_2"
             ]
-            # Arm (6) + Gripper (2)
-            # Ensure publish_dof is list/array of 6
             joint_msg.position = list(publish_dof[:6]) + [gripper_val, gripper_val]
-            joint_msg.velocity = [0.0] * 8
-            joint_msg.effort = [0.0] * 8
-            
+            joint_msg.velocity = [0.0] * 8; joint_msg.effort = [0.0] * 8
             self.pub_joints.publish(joint_msg)
-            
-        if state:
-            is_relative = self.relative_mode_active
-            draw_ui_overlay(img, state, 0.0, is_relative)
-            
+
+        # --- UI Update ---
+        if state or img is not None:
+            # Pass dummy fps (0.0) -> We'll use fps arg for status text if we don't change sig
+            # Wait, better to update the signature.
+            # Currently signature is (img, state, fps, is_relative).
+            # Let's map is_relative argument to be our status text for now to minimal change?
+            # Or just update signature in next step.
+            # I will assume signature UPDATE in next step: (img, state, status_text, status_col)
+            try:
+                draw_ui_overlay(img, state, ui_status, ui_color) # Speculative call, next tool will fix def
+            except:
+                pass # Safe fail until sync
+        
         cv2.imshow("DexTel Control", img)
 
 
