@@ -99,6 +99,12 @@ class RetargetingWrapper:
         # Must match the offset distance of tool0_z/y in the URDF (0.1m)
         self.vector_scale = 0.1 
         
+        # Identify Fixed Joints count
+        # The optimizer expects us to provide values for non-optimized joints
+        self.num_fixed = robot.model.nq - len(target_joint_names)
+        self.fixed_qpos = np.zeros(self.num_fixed)
+        print(f"[INFO] Retargeting Config: {len(target_joint_names)} Optimized Joints, {self.num_fixed} Fixed Joints.")
+        
     def solve(self, target_pos, target_rot):
         # target_rot columns are X, Y, Z axes
         v_approach = target_rot[:, 2] # Z axis
@@ -127,7 +133,8 @@ class RetargetingWrapper:
         try:
             # SeqRetargeting.retarget expects a single ref_value array
             result_q = self.retargeting.retarget(
-                ref_value=target_vecs
+                ref_value=target_vecs,
+                fixed_qpos=self.fixed_qpos
             )
             return result_q
         except Exception as e:
@@ -198,7 +205,10 @@ class RetargetingWrapper:
              # Note: SeqRetargeting.retarget might ignore warm_start if not explicitly supported in all versions,
              # but usually it uses self.last_q. We set self.last_q above.
              # We run it to update any other internal history.
-            _ = self.retargeting.retarget(ref_value=target_vecs)
+            _ = self.retargeting.retarget(
+                ref_value=target_vecs,
+                fixed_qpos=self.fixed_qpos
+            )
             
             # Re-enforce last_q just in case the solve moved it slightly (it shouldn't if q is exact solution)
             self.retargeting.last_q = q

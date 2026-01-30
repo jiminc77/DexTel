@@ -110,13 +110,19 @@ def main():
     # Reconstruct target vecs
     target_vecs = np.vstack([t_pos, t_vec_z, t_vec_y])
     
+    # Calculate Fixed Params
+    nq_total = wrapper.optimizer.robot.model.nq
+    num_fixed = nq_total - len(tgt_jnames)
+    fixed_q = np.zeros(num_fixed)
+    print(f"Computed Fixed Joints: {num_fixed}")
+    
     def try_direct_solve(q_guess, label):
         try:
             print(f"Attempting {label} with shape {q_guess.shape}...")
             # Correct Signature: retarget(ref_value, fixed_qpos, last_qpos)
             opt_q = wrapper.optimizer.retarget(
                 ref_value=target_vecs, 
-                fixed_qpos=np.array([]), 
+                fixed_qpos=fixed_q, 
                 last_qpos=q_guess
             )
             dir_diff = np.linalg.norm(opt_q[:6] - home_joints)
