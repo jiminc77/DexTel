@@ -1,8 +1,6 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64, Float64MultiArray
-from builtin_interfaces.msg import Time
 from ament_index_python.packages import get_package_share_directory
 
 import numpy as np
@@ -13,13 +11,18 @@ import os
 from dextel.ur3_realsense_hamer import RobustTracker, HandState, draw_ui_overlay
 from dextel.retargeting import RetargetingWrapper
 
+# Calibration States
+STATE_WAITING = 0
+STATE_CALIBRATING = 1
+STATE_ACTIVE = 2
+
 class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
         
-        # --- 1. Robot Configurations (Define FIRST) ---
+        # --- 1. Robot Configurations ---
         # User-defined Home Configuration (Joint Space)
-        # base, shoulder_lift, elbow, w1, w2, w3
+        # [base, shoulder_lift, elbow, wrist1, wrist2, wrist3]
         self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
         self.robot_home_pos = None
         self.robot_home_rot = None
@@ -28,8 +31,7 @@ class DexTelNode(Node):
         try:
             self.dextel_base = get_package_share_directory('dextel')
         except Exception as e:
-            self.get_logger().warn(f"Could not find package share directory ({e}). Falling back to local source path.")
-            # Fallback: assume we are in src/dextel/dextel/dextel_node.py -> want src/dextel
+            self.get_logger().warn(f"Package 'dextel' not found. Fallback to source path.")
             self.dextel_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
@@ -55,17 +57,20 @@ class DexTelNode(Node):
             self.retargeting_enabled = False
             
         self.q_filtered = None
-        self.alpha = 0.4 # Smoothing factor (0.0 = infinite smooth/lag, 1.0 = no smooth)
+        self.alpha = 0.4 # Smoothing factor (1.0 = no smooth)
 
         self.timer = self.create_timer(1.0/30.0, self.control_loop)
-        self.frame_count = 0
         self.get_logger().info("DexTel Node Ready.")
 
-        # --- Relative Mapping Components ---
-        self.origin_hand_pos = None  # Position of hand when 'R' was pressed
+        # --- State Machine & Relative Mapping ---
+        self.state = STATE_WAITING
+        self.origin_hand_pos = None
+        self.origin_hand_rot = None
+        self.calib_start_time = 0.0
+        self.calib_samples_pos = []
+        self.calib_samples_rot = []
         
-        self.relative_mode_active = False
-        self.movement_scale = 1.5 # Slightly amplified movement for ease
+        self.movement_scale = 1.5 
 
     def control_loop(self):
         # Initialize Home Pose via FK
@@ -73,22 +78,9 @@ class DexTelNode(Node):
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
             self.robot_home_rot = rot
-            self.get_logger().info(f"Home Pose Computed: {pos}")
 
         img, state = self.tracker.process_frame()
         if img is None: return
-
-        # Constants for States
-        STATE_WAITING = 0      # Robot at Home, Waiting for Hand + R
-        STATE_CALIBRATING = 1  # Accumulating samples for 2s
-        STATE_ACTIVE = 2       # Relative Control Active
-        
-        # Init State if needed
-        if not hasattr(self, 'state'):
-            self.state = STATE_WAITING
-            self.calib_start_time = 0.0
-            self.calib_samples_pos = []
-            self.calib_samples_rot = [] # Store rotations
 
         # --- User Input ---
         key = cv2.waitKey(1)
@@ -96,14 +88,12 @@ class DexTelNode(Node):
             rclpy.shutdown()
             return
         elif key & 0xFF == ord('r'):
-            # Logic: If Hand -> Calibrate. If No Hand -> Wait.
-            
             if state is not None:
                 self.state = STATE_CALIBRATING
                 self.calib_start_time = time.time()
                 self.calib_samples_pos = []
                 self.calib_samples_rot = []
-                self.q_filtered = None # Reset filter
+                self.q_filtered = None 
                 self.get_logger().info("Starting Calibration (2s)...")
             else:
                 self.state = STATE_WAITING
