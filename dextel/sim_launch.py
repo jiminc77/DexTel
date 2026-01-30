@@ -168,15 +168,50 @@ def main():
             if gripper_indices:
                 print(f"[DexTel] Configuring Gripper Joints at indices: {gripper_indices} ({[joint_names[i] for i in gripper_indices]})")
                 
-                # Apply High Stiffness ONLY to Gripper Joints (leaving arm joints as default/physics driven)
-                # Gripper needs to be stiff to hold objects and not dangle
-                stiffness_gripper = np.array([10000.0] * len(gripper_indices))
-                damping_gripper = np.array([1000.0] * len(gripper_indices))
-                
                 if hasattr(robot, "_articulation_view"):
-                    # Use indices argument to ONLY update specific joints
-                    robot._articulation_view.set_gains(kps=stiffness_gripper, kds=damping_gripper, indices=np.array(gripper_indices))
-                    print(f"[DexTel] Applied High Stiffness to GRIPPER joints only (indices: {gripper_indices}).")
+                    try:
+                        # 1. Get Current Gains (shape: [num_envs, num_dof])
+                        # This ensures we don't zero-out the arm stiffness
+                        current_kps, current_kds = robot._articulation_view.get_gains()
+                        
+                        # 2. Prepare New Gains (Handle Tensor vs Numpy)
+                        if hasattr(current_kps, 'cpu'): # Torch Tensor
+                            new_kps = current_kps.clone()
+                            new_kds = current_kds.clone()
+                            # Ensure we write to the first env (row 0)
+                            new_kps[0, gripper_indices] = 1.0e4
+                            new_kds[0, gripper_indices] = 1.0e3
+                        else: # Numpy
+                            new_kps = np.copy(current_kps)
+                            new_kds = np.copy(current_kds)
+                            # Handle shape (num_envs, num_dof) or (num_dof,)
+                            if new_kps.ndim == 2:
+                                new_kps[0, gripper_indices] = 1.0e4
+                                new_kds[0, gripper_indices] = 1.0e3
+                            else:
+                                new_kps[gripper_indices] = 1.0e4
+                                new_kds[gripper_indices] = 1.0e3
+
+                        # 3. Apply Full Array
+                        robot._articulation_view.set_gains(kps=new_kps, kds=new_kds)
+                        print(f"[DexTel] Successfully updated gains. Gripper stiffened (1.0e4). Arm preserved.")
+                        
+                        # Debug Print
+                        if hasattr(new_kps, 'cpu'):
+                            print(f"[DexTel] Active Kps: {new_kps[0].cpu().numpy()}")
+                        else:   
+                            print(f"[DexTel] Active Kps: {new_kps if new_kps.ndim==1 else new_kps[0]}")
+
+                    except Exception as e:
+                        print(f"[DexTel] Error updating gains via view: {e}")
+                        print(f"[DexTel] Attempting fallback (blind set)...")
+                        # Fallback: Create generic array (Risky for arm, but gripper works)
+                        kps = np.ones(robot.num_dof) * 4000.0 # Moderate for arm
+                        kds = np.ones(robot.num_dof) * 100.0
+                        # Overkill for gripper
+                        kps[gripper_indices] = 10000.0
+                        kds[gripper_indices] = 1000.0
+                        robot._articulation_view.set_gains(kps=kps, kds=kds)
                 else:
                     print("[DexTel] [WARN] Could not set gains: _articulation_view not found.")
             else:
