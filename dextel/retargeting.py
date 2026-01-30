@@ -60,10 +60,20 @@ class RetargetingWrapper:
         # Robot Vec 2 -> Human Vec 2 (Y-axis)
         # Using 1D array to strictly map 1-to-1
         dummy_indices = np.array([0, 1, 2], dtype=int)
+        
+        # Explicitly define the 6 movable joints to avoid optimizing fixed joints
+        target_joint_names = [
+            "shoulder_pan_joint", 
+            "shoulder_lift_joint", 
+            "elbow_joint", 
+            "wrist_1_joint", 
+            "wrist_2_joint", 
+            "wrist_3_joint"
+        ]
 
         self.optimizer = VectorOptimizer(
             robot=robot,
-            target_joint_names=robot.dof_joint_names,
+            target_joint_names=target_joint_names,
             target_origin_link_names=target_origin_link_names,
             target_task_link_names=target_task_link_names,
             target_link_human_indices=dummy_indices,
