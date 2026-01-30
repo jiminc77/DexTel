@@ -30,16 +30,9 @@ def main():
         if not k.startswith('_'): 
             print(f"  {k}: {type(v)}")
     
-    home_joints = np.array([-0.20635002, 0.13105, 0.3033, -1.8, 1.57, 0.0]) # Approx from logs (first 3 valid, rest dummy?)
-    # Wait, logs said: [-0.20635002  0.13105     0.3033    ] for Home Pose Computed. That's XYZ.
-    # I need home joints.
-    # dextel_node.py defines: self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0]) approx?
-    # Actually checking dextel_node.py lines would be better.
-    # In dextel_node.py:
-    # self.home_joints = np.deg2rad([0, -45, -90, -135, 90, 0]) ? NO.
-    # Let's assume standard intuitive home: [0, -pi/2, -pi/2, -pi/2, pi/2, 0]
-    
-    home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
+    # Correct Home Joints from dextel_node.py
+    # [0, -90, -90, -90, 90, 0]
+    home_joints = np.array([0.0, -1.5708, -1.5708, -1.5708, 1.5708, 0.0])
     
     # 1. Reset State
     print("\n--- Testing Reset State ---")
