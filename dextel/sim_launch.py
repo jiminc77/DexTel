@@ -30,6 +30,7 @@ from omni.isaac.core import World
 from omni.isaac.core.utils.stage import open_stage
 from omni.isaac.core.robots import Robot
 from pxr import Usd, UsdPhysics, Sdf
+import omni.usd
 
 def create_ros2_bridge_graph():
     """Creates the OmniGraph for ROS 2 communication."""
