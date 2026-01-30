@@ -109,10 +109,12 @@ def main():
     target_vecs = np.vstack([t_pos, t_vec_z, t_vec_y])
     
     try:
-        # VectorOptimizer.retarget takes (ref_value, warm_start, ...)
-        # Note: Return type might be just q, or (q, info). Check dex_retargeting signature if possible. 
-        # Usually it returns q.
-        opt_q = wrapper.optimizer.retarget(ref_value=target_vecs, warm_start=home_joints)
+        # Correct Signature: retarget(ref_value, fixed_qpos, last_qpos)
+        opt_q = wrapper.optimizer.retarget(
+            ref_value=target_vecs, 
+            fixed_qpos=np.array([]), 
+            last_qpos=home_joints
+        )
         
         dir_diff = np.linalg.norm(opt_q[:6] - home_joints)
         print(f"Direct Opt Base: {opt_q[0]}")
