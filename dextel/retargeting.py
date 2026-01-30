@@ -118,4 +118,31 @@ class RetargetingWrapper:
         # Reset SeqRetargeting internal state
         if hasattr(self.retargeting, 'last_q'):
             self.retargeting.last_q = q
-            # print(f"[INFO] Retargeting State Reset to: {q[:6]}...")
+        
+        # Perform a "Warm Up" solve to ensure optimizer internal state is synced
+        # 1. Compute FK for the reset q
+        pos, rot = self.compute_fk(q)
+        
+        # 2. Construct Target Vectors
+        v_approach = rot[:, 2] # Z
+        v_normal = rot[:, 1]   # Y
+        
+        target_vecs = np.vstack([
+            pos,
+            v_approach * self.vector_scale,
+            v_normal * self.vector_scale
+        ])
+        
+        # 3. Force Retarget
+        try:
+             # Force warm start with q
+             # Note: SeqRetargeting.retarget might ignore warm_start if not explicitly supported in all versions,
+             # but usually it uses self.last_q. We set self.last_q above.
+             # We run it to update any other internal history.
+            _ = self.retargeting.retarget(ref_value=target_vecs)
+            
+            # Re-enforce last_q just in case the solve moved it slightly (it shouldn't if q is exact solution)
+            self.retargeting.last_q = q
+            # print(f"[INFO] Retargeting State Reset & Warmed Up to: {q[:6]}")
+        except Exception as e:
+            print(f"[ERR] Reset State Warmup Failed: {e}")
