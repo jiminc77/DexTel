@@ -87,6 +87,12 @@ class DexTelNode(Node):
             return
         elif key & 0xFF == ord('r'):
             # Logic: If Hand -> Calibrate. If No Hand -> Wait.
+            
+            # --- CRITICAL: Reset IK Solver State to Home ---
+            # Prevents "flipping" / weird solutions by telling solver we are at Home.
+            if self.retargeting_enabled:
+                self.retargeting.reset_state(self.home_joints)
+
             if state is not None:
                 self.state = STATE_CALIBRATING
                 self.calib_start_time = time.time()

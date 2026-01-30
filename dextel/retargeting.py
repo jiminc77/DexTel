@@ -101,4 +101,23 @@ class RetargetingWrapper:
             return frame.translation.copy(), frame.rotation.copy()
         else:
             print("[ERR] 'tool0' frame not found in URDF!")
+        else:
+            print("[ERR] 'tool0' frame not found in URDF!")
             return np.zeros(3), np.eye(3)
+
+    def reset_state(self, q: np.ndarray):
+        """
+        Resets the internal state (warm start) of the IK solver to the specified joint config.
+        Crucial for avoiding 'flipping' when switching modes.
+        """
+        # Ensure correct size
+        model = self.optimizer.robot.model
+        if q.shape[0] != model.nq:
+             q_padded = np.zeros(model.nq)
+             q_padded[:min(q.shape[0], model.nq)] = q
+             q = q_padded
+             
+        # Reset SeqRetargeting internal state
+        if hasattr(self.retargeting, 'last_q'):
+            self.retargeting.last_q = q
+            # print(f"[INFO] Retargeting State Reset to: {q[:6]}...")
