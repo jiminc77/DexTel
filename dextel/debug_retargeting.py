@@ -22,6 +22,7 @@ def main():
     print(f"Frame 'tool0': {model.existFrame('tool0')}")
     print(f"Frame 'tool0_z': {model.existFrame('tool0_z')}")
     print(f"Frame 'tool0_y': {model.existFrame('tool0_y')}")
+    print(f"Base Limits: [{model.lowerPositionLimit[0]}, {model.upperPositionLimit[0]}]")
     
     home_joints = np.array([-0.20635002, 0.13105, 0.3033, -1.8, 1.57, 0.0]) # Approx from logs (first 3 valid, rest dummy?)
     # Wait, logs said: [-0.20635002  0.13105     0.3033    ] for Home Pose Computed. That's XYZ.

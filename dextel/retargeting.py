@@ -72,6 +72,14 @@ class RetargetingWrapper:
             scaling=1.0
         )
         
+        # --- CRITICAL: CLAMP BASE JOINT TO PREVENT FLIP ---
+        # The UR3e base can rotate 360, but for teleop we want to stay "Front Facing"
+        # Blocking regions > 90 deg preventing the "Back Flip" (2.31 rad) solution.
+        model = robot.model
+        # Index 0 is Base Pan
+        model.lowerPositionLimit[0] = -1.6 # ~ -90 deg
+        model.upperPositionLimit[0] = 1.6  # ~ +90 deg
+        
         self.retargeting = SeqRetargeting(
             optimizer=self.optimizer,
             has_joint_limits=True
