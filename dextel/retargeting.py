@@ -58,10 +58,8 @@ class RetargetingWrapper:
         # Robot Vec 0 -> Human Vec 0 (Position)
         # Robot Vec 1 -> Human Vec 1 (Z-axis)
         # Robot Vec 2 -> Human Vec 2 (Y-axis)
-        dummy_indices = np.array([
-            [0, 1, 2],
-            [0, 1, 2]
-        ], dtype=int)
+        # Using 1D array to strictly map 1-to-1
+        dummy_indices = np.array([0, 1, 2], dtype=int)
 
         self.optimizer = VectorOptimizer(
             robot=robot,
@@ -71,6 +69,16 @@ class RetargetingWrapper:
             target_link_human_indices=dummy_indices,
             scaling=1.0
         )
+        
+        # Add regularization to prevent twisting (redundant joints drifting)
+        # Damping towards zero (or current pose in SeqRetargeting?)
+        try:
+             # BasicOptimizer allows setting joint weight
+             # This pulls joints towards 0 by default, stabilizing the null space.
+             self.optimizer.set_joint_parameter(weight=0.1) 
+             print("[INFO] Joint Regularization Enabled (weight=0.1)")
+        except Exception as e:
+             print(f"[WARN] Could not set joint regularization: {e}")
         
         # --- CRITICAL: CLAMP BASE JOINT TO PREVENT FLIP ---
         # The UR3e base can rotate 360, but for teleop we want to stay "Front Facing"
