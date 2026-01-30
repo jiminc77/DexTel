@@ -48,9 +48,22 @@ def main():
     q_sol = wrapper.solve(pos, rot)
     print(f"Solved Joints: {q_sol}")
     
+    # Slice to 6 DOF
+    if q_sol.shape[0] > 6:
+        q_sol = q_sol[:6]
+    
     diff = np.linalg.norm(q_sol - home_joints)
-    print(f"Diff Norm: {diff}")
+    print(f"Diff Norm (Joint Space): {diff}")
     print(f"Base Joint: {q_sol[0]} (Expected: {home_joints[0]})")
+    
+    # Verify FK of solution
+    sol_pos, sol_rot = wrapper.compute_fk(q_sol)
+    pos_err = np.linalg.norm(sol_pos - pos)
+    rot_err = np.linalg.norm(sol_rot - rot) # Frobenious norm approx
+    
+    print(f"\nFK Verification:")
+    print(f"Pos Error: {pos_err}")
+    print(f"Rot Error: {rot_err}")
     
     if abs(q_sol[0] - home_joints[0]) > 2.0:
         print("!!! FLIP DETECTED !!!")
