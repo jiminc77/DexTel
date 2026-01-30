@@ -168,19 +168,15 @@ def main():
             if gripper_indices:
                 print(f"[DexTel] Configuring Gripper Joints at indices: {gripper_indices} ({[joint_names[i] for i in gripper_indices]})")
                 
-                # Get current gains (if possible) or set default
-                # Arm joints: Mild Stiffness (to allow IK compliance if needed, but usually high for positional control)
-                # Gripper joints: High Stiffness (to hold position)
-                
-                kps = np.ones(robot.num_dof) * 10000.0
-                kds = np.ones(robot.num_dof) * 1000.0
-                
-                # Make gripper extra stiff? 10000 is already quite high.
-                # If dangling, main issue is likely kps was 0 or defaulting to 0 for those joints.
+                # Apply High Stiffness ONLY to Gripper Joints (leaving arm joints as default/physics driven)
+                # Gripper needs to be stiff to hold objects and not dangle
+                stiffness_gripper = np.array([10000.0] * len(gripper_indices))
+                damping_gripper = np.array([1000.0] * len(gripper_indices))
                 
                 if hasattr(robot, "_articulation_view"):
-                    robot._articulation_view.set_gains(kps=kps, kds=kds)
-                    print(f"[DexTel] Applied High Stiffness (kps={kps[0]}) to ALL joints including gripper.")
+                    # Use indices argument to ONLY update specific joints
+                    robot._articulation_view.set_gains(kps=stiffness_gripper, kds=damping_gripper, indices=np.array(gripper_indices))
+                    print(f"[DexTel] Applied High Stiffness to GRIPPER joints only (indices: {gripper_indices}).")
                 else:
                     print("[DexTel] [WARN] Could not set gains: _articulation_view not found.")
             else:
