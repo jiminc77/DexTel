@@ -20,14 +20,11 @@ class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
         
-        # --- 1. Robot Configurations ---
-        # User-defined Home Configuration (Joint Space)
         # [base, shoulder_lift, elbow, wrist1, wrist2, wrist3]
         self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
         self.robot_home_pos = None
         self.robot_home_rot = None
         
-        # Load Workspace Config
         try:
             self.dextel_base = get_package_share_directory('dextel')
         except Exception as e:
@@ -57,12 +54,11 @@ class DexTelNode(Node):
             self.retargeting_enabled = False
             
         self.q_filtered = None
-        self.alpha = 0.4 # Smoothing factor (1.0 = no smooth)
+        self.alpha = 0.4
 
         self.timer = self.create_timer(1.0/30.0, self.control_loop)
         self.get_logger().info("DexTel Node Ready.")
 
-        # --- State Machine & Relative Mapping ---
         self.state = STATE_WAITING
         self.origin_hand_pos = None
         self.origin_hand_rot = None
@@ -73,7 +69,6 @@ class DexTelNode(Node):
         self.movement_scale = 1.5 
 
     def control_loop(self):
-        # Initialize Home Pose via FK
         if self.robot_home_pos is None and self.retargeting_enabled:
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
@@ -82,7 +77,6 @@ class DexTelNode(Node):
         img, state = self.tracker.process_frame()
         if img is None: return
 
-        # --- User Input ---
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
             rclpy.shutdown()
@@ -100,31 +94,27 @@ class DexTelNode(Node):
                 self.q_filtered = None 
                 self.get_logger().info("Reset to WAITING (Home).")
 
-        # --- Control Logic ---
         publish_dof = None
         gripper_val = 0.0
         ui_status = "WAITING"
-        ui_color = (100, 100, 100) # Grey
+        ui_color = (100, 100, 100)
 
         if self.retargeting_enabled:
             
-            # State Machine
             if self.state == STATE_WAITING:
-                # Behavior: Hold Home. Ignore Hand.
                 publish_dof = self.home_joints
                 self.q_filtered = publish_dof
                 ui_status = "WAITING (Press R)"
-                ui_color = (0, 165, 255) # Orange
+                ui_color = (0, 165, 255)
 
             elif self.state == STATE_CALIBRATING:
-                # Behavior: Hold Home. Collect Samples.
                 publish_dof = self.home_joints
                 self.q_filtered = publish_dof
                 
                 elapsed = time.time() - self.calib_start_time
                 remaining = max(0.0, 2.0 - elapsed)
                 ui_status = f"CALIB... {remaining:.1f}s"
-                ui_color = (0, 255, 255) # Yellow
+                ui_color = (0, 255, 255)
                 
                 if state:
                     self.calib_samples_pos.append(state.position)
@@ -185,7 +175,6 @@ class DexTelNode(Node):
                     if np.isnan(q_raw).any(): q_raw = np.zeros(6)
                     
                     # --- SAFETY: Check for Base Flip (180 deg) ---
-                    # Sometimes IK Solver flips base (approx 3.14 rad). We must reject this.
                     base_diff = abs(q_raw[0] - self.home_joints[0])
                     if base_diff > 2.0: # ~115 degrees threshold
                         self.get_logger().warn(f"[SAFETY] Base Flip Detected! Diff: {base_diff:.2f} rad. Rejecting Solution.")
@@ -195,12 +184,7 @@ class DexTelNode(Node):
                         else:
                             q_raw = self.home_joints
                             
-                        # Optional: Force reset solver again to help it recover
                         self.retargeting.reset_state(q_raw)
-                    
-                    # DEBUG: Check for flip on first frame? (Optional)
-                    # if self.q_filtered is None:
-                    #     self.get_logger().info(f"First Active IK: {q_raw} (Home: {self.home_joints})")
                     
                     if self.q_filtered is None: self.q_filtered = q_raw
                     else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
@@ -227,18 +211,11 @@ class DexTelNode(Node):
             joint_msg.velocity = [0.0] * 8; joint_msg.effort = [0.0] * 8
             self.pub_joints.publish(joint_msg)
 
-        # --- UI Update ---
         if state or img is not None:
-            # Pass dummy fps (0.0) -> We'll use fps arg for status text if we don't change sig
-            # Wait, better to update the signature.
-            # Currently signature is (img, state, fps, is_relative).
-            # Let's map is_relative argument to be our status text for now to minimal change?
-            # Or just update signature in next step.
-            # I will assume signature UPDATE in next step: (img, state, status_text, status_col)
             try:
-                draw_ui_overlay(img, state, ui_status, ui_color) # Speculative call, next tool will fix def
+                draw_ui_overlay(img, state, ui_status, ui_color)
             except:
-                pass # Safe fail until sync
+                pass
         
         cv2.imshow("DexTel Control", img)
 
