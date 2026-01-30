@@ -54,10 +54,14 @@ class RetargetingWrapper:
         target_origin_link_names = ["ur3e_base_link", "tool0", "tool0"]
         target_task_link_names = ["tool0", "tool0_z", "tool0_y"]
         
-        # Indices are not strictly used in the logic we rely on (direct retargeting), 
-        # but required by init. Passing dummy indices.
-        # VectorOptimizer expects shape (2, N_vectors)
-        dummy_indices = np.zeros((2, 3), dtype=int)
+        # Correctly map indices: 
+        # Robot Vec 0 -> Human Vec 0 (Position)
+        # Robot Vec 1 -> Human Vec 1 (Z-axis)
+        # Robot Vec 2 -> Human Vec 2 (Y-axis)
+        dummy_indices = np.array([
+            [0, 1, 2],
+            [0, 1, 2]
+        ], dtype=int)
 
         self.optimizer = VectorOptimizer(
             robot=robot,
