@@ -45,6 +45,16 @@ class DexTelNode(Node):
         self.frame_count = 0
         self.get_logger().info("DexTel Node Ready.")
 
+        # --- Relative Mapping Components ---
+        self.origin_hand_pos = None  # Position of hand when 'R' was pressed
+        # Robot Home Position: Comfortable center of workspace
+        # X: 0.4 (Forward), Y: 0.0 (Center), Z: 0.3 (Up)
+        self.robot_home_pos = np.array([0.4, 0.0, 0.3]) 
+        self.relative_mode_active = False
+        
+        # Scaling Factor (Optional: 1.0 = 1:1 movement)
+        self.movement_scale = 1.0
+
     def control_loop(self):
         img, state = self.tracker.process_frame()
         
@@ -54,8 +64,41 @@ class DexTelNode(Node):
 
         fps = 0.0 
         
+        # --- Handle User Input (for Reset) ---
+        key = cv2.waitKey(1)
+        if key & 0xFF == ord('q'):
+            rclpy.shutdown()
+            return
+        elif key & 0xFF == ord('r'):
+            if state is not None:
+                self.origin_hand_pos = state.position  # Capture current hand pos as origin
+                self.relative_mode_active = True
+                self.get_logger().info("Relative Mode RESET. Hand Origin Set.")
+            else:
+                 self.get_logger().info("Cannot reset: No hand detected.")
+        
+        target_pos_rob = None
+        target_rot_rob = None
+
         if state and self.retargeting_enabled:
-            q_raw = self.retargeting.solve(state.position, state.orientation)
+            # --- 1. Position Mapping Logic ---
+            if self.relative_mode_active and self.origin_hand_pos is not None:
+                # Relative Mode: Robot Home + (Current Hand - Origin Hand)
+                diff = state.position - self.origin_hand_pos
+                target_pos_rob = self.robot_home_pos + (diff * self.movement_scale)
+            else:
+                # Absolute Mode (Legacy/Fallback)
+                # Keep original behavior (Hand position directly mapped + fixed offset in tracker)
+                # Note: The tracker currently outputs a position that ALREADY includes an offset [0.3, -0.1, 0.2]
+                # To make this clean, we should probably stick to one logic. 
+                # Ideally, the tracker shouldn't add offsets if we do it here, but let's accept tracker output for absolute.
+                target_pos_rob = state.position 
+            
+            # --- 2. Orientation Mapping Logic ---
+            target_rot_rob = state.orientation
+            
+            # --- 3. Solve IK ---
+            q_raw = self.retargeting.solve(target_pos_rob, target_rot_rob)
             
             # Simple NaN check
             if np.isnan(q_raw).any():
@@ -90,15 +133,15 @@ class DexTelNode(Node):
             
             self.pub_joints.publish(joint_msg)
             
-            self.pub_joints.publish(joint_msg)
-            
         if state:
-            draw_ui_overlay(img, state, 0.0)
+            # Pass mapping info to UI
+            # We can hijack 'fps' argument or add a new one, but let's stick to modifying the overlay function signature properly later.
+            # For now, just pass 0.0 or actual if calculated.
+            is_relative = self.relative_mode_active
+            draw_ui_overlay(img, state, 0.0, is_relative)
             
         cv2.imshow("DexTel Control", img)
-        key = cv2.waitKey(1)
-        if key & 0xFF == ord('q'):
-            rclpy.shutdown()
+
 
 def main(args=None):
     rclpy.init(args=args)

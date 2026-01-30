@@ -381,7 +381,7 @@ def draw_wrist_frame(image, u, v, R, axis_len=60):
     cv2.circle(image, origin, 5, (255, 255, 255), -1)
 
 
-def draw_ui_overlay(image, state: HandState, fps: float):
+def draw_ui_overlay(image, state: HandState, fps: float, is_relative: bool = False):
     h, w = image.shape[:2]
     overlay = image.copy()
     
@@ -391,7 +391,11 @@ def draw_ui_overlay(image, state: HandState, fps: float):
     
     font = cv2.FONT_HERSHEY_DUPLEX
     cv2.putText(image, "DexTel", (20, 35), font, 0.8, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(image, f"{fps:.0f} FPS", (120, 35), font, 0.6, (150, 150, 150), 1, cv2.LINE_AA)
+    
+    # Mode Status
+    mode_str = "REL MODE" if is_relative else "ABS MODE (Press 'R')"
+    mode_col = (0, 255, 255) if is_relative else (100, 100, 255)
+    cv2.putText(image, mode_str, (140, 35), font, 0.6, mode_col, 1, cv2.LINE_AA)
     
     status = "GRIPPED" if state.is_pinched else "RELEASED"
     col = (0, 200, 100) if state.is_pinched else (200, 200, 200)
