@@ -80,7 +80,11 @@ class DexTelNode(Node):
             if state is not None:
                 self.origin_hand_pos = state.position  # Capture current hand pos as origin
                 self.relative_mode_active = True
-                self.get_logger().info("Relative Mode RESET. Hand Origin Set.")
+                
+                # Force Snap: Reset smoothing filter to avoid "gliding" back to home
+                self.q_filtered = None 
+                
+                self.get_logger().info("Relative Mode RESET. Hand Origin Set. Snapping to Home.")
             else:
                  self.get_logger().info("Cannot reset: No hand detected.")
         
