@@ -189,9 +189,11 @@ class DexTelNode(Node):
                 # Sim: instant
                 self.state = STATE_WAITING
         
-        elif self.state == STATE_WAITING:
-            target_q = self.home_joints
-            self.q_filtered = target_q
+        if self.state == STATE_WAITING:
+            # Don't hold position actively, just wait.
+            # (Robot controller holds last pos, which is Home from Homing state)
+            target_q = None 
+            self.q_filtered = self.home_joints
             status = "WAITING (Press R)"
             color = (0, 165, 255)
 
