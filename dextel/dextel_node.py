@@ -70,7 +70,7 @@ class DexTelNode(Node):
         self.tracker = RobustTracker()
             
         self.q_filtered = None
-        self.alpha = 0.04 # [Smoothing] Reduced from 0.1 for less jitter
+        self.alpha = 0.02 # [Smoothing] Reduced from 0.04 for max smoothness
 
         # Control Loop
         self.timer = self.create_timer(1.0/30.0, self.control_loop)

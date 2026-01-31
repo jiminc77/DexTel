@@ -32,27 +32,27 @@ class SimpleRobotiqDriver(Node):
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(2.0)
             self.sock.connect((self.robot_ip, self.port))
-            # Activate Gripper
-            # Assuming IFRA protocol strings or Universal Robots Dashboard strings? 
-            # Actually, port 63352 is commonly the "Dashboard" or "Gripper" socket provided by Robotiq URCap.
-            # Let's try sending the activation command string if needed.
-            # For Hand-E, it often needs 'ACT' command.
-            # Reference: wrapper often sends "ACT" then waits.
-            self.send_raw("ACT") 
-            time.sleep(2.0) # Wait for activation
-            self.send_raw("GTO") # Go To
-            self.get_logger().info("Connected & Activation Sent.")
+            # Activate Gripper (Standard Robotiq Protocol: SET ACT 1)
+            self.send_raw("SET ACT 1") 
+            time.sleep(2.0) # Wait for activation cycle
+            self.send_raw("SET GTO 1") # Go To
+            # Set Speed and Force once
+            self.send_raw("SET SPE 255")
+            self.send_raw("SET FOR 150")
+            self.get_logger().info("Connected & Activation Sent (SET ACT 1).")
         except Exception as e:
             self.get_logger().error(f"Connection Failed: {e}")
             self.sock = None
 
     def cmd_callback(self, msg):
         target = min(max(msg.data, 0.0), 1.0)
-        # Map 0.0(Close) -> 255, 1.0(Open) -> 0
-        pos_int = int((1.0 - target) * 255)
+        # Map 0.0(Open) -> 0, 1.0(Close) -> 255 (Hand-E 0=Open, 255=Closed)
+        pos_int = int(target * 255)
         
-        # Speed: 255, Force: 150
-        cmd = f"POS {pos_int} SPE 255 FOR 150"
+        # Send Position Command
+        cmd = f"SET POS {pos_int}" 
+        # Note: Logic handles SPE/FOR in connect(), or we can resend. keeping it minimal.
+        
         self.get_logger().info(f"Gripper CMD: {target:.2f} -> '{cmd}'")
         self.send_raw(cmd)
 
