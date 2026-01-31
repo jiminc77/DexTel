@@ -16,6 +16,8 @@ except ImportError:
     JointTrajectoryPoint = None
     Header = None
 
+import numpy as np
+
 
 class RobotInterface(ABC):
     def __init__(self, node: Node):
@@ -129,13 +131,30 @@ class RealRobotInterface(RobotInterface):
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported! Cannot move robot.")
             return
 
-        # [Safety] Verify deviation
+        # [Safety] Unwrapping & Deviation Check
         duration_sec = 0.033 # 30ms (Tracking Mode)
+        final_goals = list(joint_positions)
         
         if self.current_joints is not None:
             max_diff = 0.0
+            
+            # Unwrap targets to be closest to current
             for i in range(6):
-                diff = abs(joint_positions[i] - self.current_joints[i])
+                curr = self.current_joints[i]
+                tgt = final_goals[i]
+                
+                # Unwrap: tgt_new = tgt - 2pi * round((tgt - curr) / 2pi)
+                diff_raw = tgt - curr
+                
+                # Check if wrapping helps
+                # Simple logic: closest multiple of 2pi
+                # k = round(diff / 2pi)
+                k = round(diff_raw / (2 * np.pi))
+                tgt_new = tgt - k * 2 * np.pi
+                
+                final_goals[i] = tgt_new
+                
+                diff = abs(tgt_new - curr)
                 if diff > max_diff: max_diff = diff
             
             # If deviation > 0.1 rad (~6 degrees), move SLOWLY.
@@ -152,12 +171,12 @@ class RealRobotInterface(RobotInterface):
         msg.joint_names = self.joint_names
         
         point = JointTrajectoryPoint()
-        point.positions = list(joint_positions)
+        point.positions = final_goals
         point.time_from_start.sec = int(duration_sec)
         point.time_from_start.nanosec = int((duration_sec - int(duration_sec)) * 1e9)
         
         msg.points = [point]
-        self.node.get_logger().info(f"[RealRobot] Pub Traj: {joint_positions[0]:.2f} (Time: {duration_sec}s)...", throttle_duration_sec=1.0)
+        self.node.get_logger().info(f"[RealRobot] Pub Traj: {final_goals[0]:.2f} (Time: {duration_sec}s)...", throttle_duration_sec=1.0)
         self.pub.publish(msg)
 
     def get_current_joints(self):
