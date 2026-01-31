@@ -109,10 +109,6 @@ class DexTelNode(Node):
         # 5. Publish to Robot
         gripper_val = self.get_gripper_val(state)
         
-        # [DEBUG] Heartbeat log every 2 seconds
-        # Show mode (Sim vs Real) in the heartbeat
-        mode_str = type(self.robot).__name__
-        self.get_logger().info(f"Alive | Mode: {mode_str} | State: {ui_status} | HasTarget: {target_joints is not None}", throttle_duration_sec=2.0)
         
         if target_joints is not None:
             if isinstance(self.robot, SimRobotInterface):

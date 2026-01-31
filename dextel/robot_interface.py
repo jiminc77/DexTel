@@ -113,7 +113,8 @@ class RealRobotInterface(RobotInterface):
         point.time_from_start.nanosec = 33000000 # ~30ms target time (tunable)
         
         msg.points = [point]
-        self.node.get_logger().info(f"[RealRobot] Pub Traj: {joint_positions[0]:.2f} ...")
+        msg.points = [point]
+        self.node.get_logger().info(f"[RealRobot] Pub Traj: {joint_positions[0]:.2f} ...", throttle_duration_sec=1.0)
         self.pub.publish(msg)
 
     def move_gripper(self, value: float):
