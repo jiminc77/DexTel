@@ -131,8 +131,10 @@ class RealRobotInterface(RobotInterface):
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported! Cannot move robot.")
             return
 
+
         # [Safety] Unwrapping & Deviation Check
-        duration_sec = 0.033 # 30ms (Tracking Mode)
+        # Jitter Fix: Increase duration to overlap frames (80ms vs 33ms loop)
+        duration_sec = 0.08 
         final_goals = list(joint_positions)
         
         if self.current_joints is not None:

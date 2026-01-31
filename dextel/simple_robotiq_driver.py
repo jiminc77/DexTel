@@ -39,6 +39,7 @@ class SimpleRobotiqDriver(Node):
             # For Hand-E, it often needs 'ACT' command.
             # Reference: wrapper often sends "ACT" then waits.
             self.send_raw("ACT") 
+            time.sleep(2.0) # Wait for activation
             self.send_raw("GTO") # Go To
             self.get_logger().info("Connected & Activation Sent.")
         except Exception as e:

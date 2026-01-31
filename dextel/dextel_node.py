@@ -83,6 +83,7 @@ class DexTelNode(Node):
         self.calib_start_time = 0.0
         self.calib_samples_pos = []
         self.calib_samples_rot = []
+        self.last_hand_seen_time = 0.0
         
         self.movement_scale = 1.5 
 
@@ -234,6 +235,7 @@ class DexTelNode(Node):
             color = (0, 255, 0)
             
             if state:
+                self.last_hand_seen_time = time.time()
                 diff_pos = state.position - self.origin_hand_pos     
                 target_pos = self.robot_home_pos + (diff_pos * self.movement_scale)
                 
@@ -257,7 +259,19 @@ class DexTelNode(Node):
                 
                 target_q = self.q_filtered
             else:
-                target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
+                # Hand Lost Logic
+                if time.time() - self.last_hand_seen_time > 3.0:
+                    status = "LOST HAND -> HOMING"
+                    target_q = self.home_joints
+                    # Smoothly interpolate back to home
+                    if self.q_filtered is not None:
+                         # Very slow return
+                         self.q_filtered = 0.05 * target_q + 0.95 * self.q_filtered
+                         target_q = self.q_filtered
+                else:
+                    target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
+                    status = "Hand Lost (Wait 3s...)"
+
 
         return target_q, status, color
 
