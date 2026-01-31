@@ -47,30 +47,27 @@ class SimpleRobotiqDriver(Node):
 
     def cmd_callback(self, msg):
         target = min(max(msg.data, 0.0), 1.0)
-        # Robotiq Hand-E: 0 (Open) to 255 (Closed)? Or 0 (Closed) - 255 (Open)?
-        # Usually: 0 is Open, 255 is Closed.
-        # BUT DexTel Logic: 0.0 = Closed(Pinched), 1.0 = Open.
-        
         # Map 0.0(Close) -> 255, 1.0(Open) -> 0
         pos_int = int((1.0 - target) * 255)
         
         # Speed: 255, Force: 150
         cmd = f"POS {pos_int} SPE 255 FOR 150"
+        self.get_logger().info(f"Gripper CMD: {target:.2f} -> '{cmd}'")
         self.send_raw(cmd)
 
     def send_raw(self, text):
         if self.sock is None: 
+            self.get_logger().warn("Socket not connected, dropping command.")
             return
         try:
             cmd = text + "\n"
             self.sock.sendall(cmd.encode('utf-8'))
+            self.get_logger().info(f"Sent: {text}")
             # Recv response?
             # response = self.sock.recv(1024)
         except Exception as e:
             self.get_logger().error(f"Send Failed: {e}")
             self.sock = None
-            # Reconnect?
-            # self.connect()
 
 def main(args=None):
     rclpy.init(args=args)
