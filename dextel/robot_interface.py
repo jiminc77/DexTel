@@ -69,19 +69,16 @@ class SimRobotInterface(RobotInterface):
         msg.position = list(arm_joints) + [gripper_val, gripper_val]
         self.pub.publish(msg)
 
-    def move_gripper(self, value: float):
-        pass
-
-# Conditional Imports for Gripper Service
+# Conditional Imports for Gripper Topic
 try:
-    from ros2_robotiqgripper.srv import RobotiqGripper
+    from std_msgs.msg import Float32
 except ImportError:
-    RobotiqGripper = None
+    Float32 = None
 
 class RealRobotInterface(RobotInterface):
     """
     Publishes to /scaled_joint_trajectory_controller/joint_trajectory for Real UR3e.
-    Control Gripper via Service.
+    Controls Gripper via Topic /dextel/gripper_cmd (Float32).
     """
     def __init__(self, node: Node):
         super().__init__(node)
@@ -91,16 +88,15 @@ class RealRobotInterface(RobotInterface):
             "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
         ]
         
-        # Gripper Service Client (IFRA-Cranfield)
-        self.cli_gripper = None
-        if RobotiqGripper is not None:
-             self.cli_gripper = self.node.create_client(RobotiqGripper, 'Robotiq_Gripper', qos_profile=rclpy.qos.QoSProfile(depth=10))
-        else:
-             self.node.get_logger().warn("RobotiqGripper Service Type not found. Gripper control disabled.")
+        # Gripper Publisher (Talks to simple_robotiq_driver)
+        self.pub_gripper = None
+        if Float32 is not None:
+             self.pub_gripper = self.node.create_publisher(Float32, '/dextel/gripper_cmd', 10)
         
         self.last_gripper_val = -1.0 
 
     def move_joints(self, joint_positions: list):
+        if JointTrajectory is None: return
         msg = JointTrajectory()
         msg.header = Header()
         msg.header.stamp = self.node.get_clock().now().to_msg()
@@ -116,11 +112,15 @@ class RealRobotInterface(RobotInterface):
 
     def move_gripper(self, value: float):
         # Value: 0.0 (Closed) -> 1.0 (Open)
-        # Optimization: Only call service if state changes significantly
+        
+        if self.pub_gripper is None: return
+
+        # Optimization: Only publish if state changes significantly
         if abs(value - self.last_gripper_val) < 0.1:
             return
             
-        # TODO: Implement Async Service Call
-        # For now, just logging commands
-        # self.node.get_logger().info(f"Gripper Command: {value}")
+        msg = Float32()
+        msg.data = float(value)
+        self.pub_gripper.publish(msg)
+        
         self.last_gripper_val = value
