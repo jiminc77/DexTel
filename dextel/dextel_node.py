@@ -12,6 +12,7 @@ from dextel.retargeting import RetargetingWrapper
 from dextel.robot_interface import SimRobotInterface, RealRobotInterface
 
 # Calibration States
+STATE_GRIPPER_TEST = -2
 STATE_HOMING = -1
 STATE_WAITING = 0
 STATE_CALIBRATING = 1
@@ -69,7 +70,7 @@ class DexTelNode(Node):
         self.tracker = RobustTracker()
             
         self.q_filtered = None
-        self.alpha = 0.1
+        self.alpha = 0.04 # [Smoothing] Reduced from 0.1 for less jitter
 
         # Control Loop
         self.timer = self.create_timer(1.0/30.0, self.control_loop)
@@ -78,6 +79,8 @@ class DexTelNode(Node):
         # State
         self.state = STATE_HOMING # Start with Homing
         self.last_homing_cmd_time = 0.0
+        self.test_gripper_step = 0
+        self.test_gripper_timer = 0.0
         self.origin_hand_pos = None
         self.origin_hand_rot = None
         self.calib_start_time = 0.0
@@ -110,7 +113,12 @@ class DexTelNode(Node):
 
 
         # 5. Publish to Robot
-        gripper_val = self.get_gripper_val(state)
+        # In GRIPPER_TEST, we override gripper value
+        if self.state == STATE_GRIPPER_TEST:
+             # Just hold home joints, gripper value handled in logic/publish
+             gripper_val = self.get_gripper_val_for_test()
+        else:
+             gripper_val = self.get_gripper_val(state)
         
         # Only move joints if they are updated
         if target_joints is not None:
@@ -156,9 +164,26 @@ class DexTelNode(Node):
             self.get_logger().info("Reset to WAITING.")
 
     def get_gripper_val(self, state):
-        if state and state.is_pinched:
-             return 0.0 # Closed
-        return 0.025 # Open (Sim value, Real might need 0-255 or 0-1)
+        if self.use_real:
+            # Real Robot: 0.0 (Open via Robotiq logic?) or 1.0 (Closed)
+            # SimpleRobotiqDriver: 0->0, 1->255
+            # Hand-E: 0 is Open (Wide), 255 is Closed.
+            if state and state.is_pinched:
+                 return 1.0 # Closed (255)
+            return 0.0 # Open (0)
+        else:
+            # Sim
+            if state and state.is_pinched:
+                 return 0.0 
+            return 0.025 
+
+    def get_gripper_val_for_test(self):
+        # Sequence: Open -> Close -> Open
+        step = self.test_gripper_step
+        if step == 0: return 0.0 # Open
+        if step == 1: return 1.0 # Close
+        if step == 2: return 0.0 # Open
+        return 0.0
 
     def process_state_logic(self, state):
         target_q = None
@@ -191,15 +216,32 @@ class DexTelNode(Node):
                     status = f"HOMING... Error: {max_diff:.2f}"
                     
                     if max_diff < 0.1:
-                        self.state = STATE_WAITING
-                        self.get_logger().info("Robot Homing Complete. Ready.")
+                        self.state = STATE_GRIPPER_TEST
+                        self.test_gripper_step = 0
+                        self.test_gripper_timer = time.time()
+                        self.get_logger().info("Homing Done. Testing Gripper...")
                 else:
                     status = "HOMING... (No Feedback)"
             else:
                 # Sim: instant
                 self.state = STATE_WAITING
         
-        if self.state == STATE_WAITING:
+        elif self.state == STATE_GRIPPER_TEST:
+            target_q = self.home_joints
+            status = f"TEST GRIPPER {self.test_gripper_step}/3"
+            color = (200, 100, 255)
+            
+            elapsed = time.time() - self.test_gripper_timer
+            if elapsed > 1.5:
+                self.test_gripper_step += 1
+                self.test_gripper_timer = time.time()
+                self.get_logger().info(f"Gripper Test Step {self.test_gripper_step}")
+            
+            if self.test_gripper_step > 2:
+                self.state = STATE_WAITING
+                self.get_logger().info("Gripper Test Done. Waiting for User (Press R).")
+
+        elif self.state == STATE_WAITING:
             # Don't hold position actively, just wait.
             # (Robot controller holds last pos, which is Home from Homing state)
             target_q = None 
@@ -225,6 +267,7 @@ class DexTelNode(Node):
                     self.origin_hand_rot = self.calib_samples_rot[-1] 
                     self.retargeting.reset_state(self.home_joints)
                     self.state = STATE_ACTIVE
+                    self.last_hand_seen_time = time.time()
                     self.get_logger().info("Calibration Done.")
                 else:
                     self.state = STATE_WAITING
@@ -261,13 +304,9 @@ class DexTelNode(Node):
             else:
                 # Hand Lost Logic
                 if time.time() - self.last_hand_seen_time > 3.0:
-                    status = "LOST HAND -> HOMING"
-                    target_q = self.home_joints
-                    # Smoothly interpolate back to home
-                    if self.q_filtered is not None:
-                         # Very slow return
-                         self.q_filtered = 0.05 * target_q + 0.95 * self.q_filtered
-                         target_q = self.q_filtered
+                    status = "LOST -> RE-HOMING"
+                    self.state = STATE_HOMING # Go back to Homing -> Gripper Test -> Waiting
+                    self.last_homing_cmd_time = 0.0 # Force immediate home command
                 else:
                     target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
                     status = "Hand Lost (Wait 3s...)"

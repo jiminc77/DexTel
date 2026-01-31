@@ -133,8 +133,8 @@ class RealRobotInterface(RobotInterface):
 
 
         # [Safety] Unwrapping & Deviation Check
-        # Jitter Fix: Increase duration to overlap frames (80ms vs 33ms loop)
-        duration_sec = 0.08 
+        # Jitter Fix: Increase duration to overlap frames (100ms vs 33ms loop)
+        duration_sec = 0.1 
         final_goals = list(joint_positions)
         
         if self.current_joints is not None:
