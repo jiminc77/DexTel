@@ -72,6 +72,12 @@ class SimRobotInterface(RobotInterface):
     def move_gripper(self, value: float):
         pass
 
+# Conditional Imports for Gripper Service
+try:
+    from ros2_robotiqgripper.srv import RobotiqGripper
+except ImportError:
+    RobotiqGripper = None
+
 class RealRobotInterface(RobotInterface):
     """
     Publishes to /scaled_joint_trajectory_controller/joint_trajectory for Real UR3e.
@@ -86,8 +92,11 @@ class RealRobotInterface(RobotInterface):
         ]
         
         # Gripper Service Client (IFRA-Cranfield)
-        # Type is likely custom. We use a generic client if import fails.
-        self.cli_gripper = self.node.create_client(rclpy.qos.QoSProfile(depth=10), 'Robotiq_Gripper') # Verify name
+        self.cli_gripper = None
+        if RobotiqGripper is not None:
+             self.cli_gripper = self.node.create_client(RobotiqGripper, 'Robotiq_Gripper', qos_profile=rclpy.qos.QoSProfile(depth=10))
+        else:
+             self.node.get_logger().warn("RobotiqGripper Service Type not found. Gripper control disabled.")
         
         self.last_gripper_val = -1.0 
 
