@@ -176,8 +176,17 @@ class DexTelNode(Node):
             if isinstance(self.robot, RealRobotInterface):
                 curr = self.robot.get_current_joints()
                 if curr is not None:
-                    # Calculate max deviation
-                    max_diff = np.max(np.abs(np.array(curr) - np.array(self.home_joints)))
+                    # Calculate max deviation with Angular Unwrapping (Modulo 2pi)
+                    # diff = (a - b + pi) % 2pi - pi
+                    
+                    np_curr = np.array(curr)
+                    np_home = np.array(self.home_joints)
+                    
+                    diffs = np_curr - np_home
+                    # Wrap to [-pi, pi]
+                    diffs_wrapped = (diffs + np.pi) % (2 * np.pi) - np.pi
+                    
+                    max_diff = np.max(np.abs(diffs_wrapped))
                     status = f"HOMING... Error: {max_diff:.2f}"
                     
                     if max_diff < 0.1:
