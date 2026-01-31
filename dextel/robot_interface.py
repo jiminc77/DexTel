@@ -97,11 +97,52 @@ class RealRobotInterface(RobotInterface):
              self.pub_gripper = self.node.create_publisher(Float32, '/dextel/gripper_cmd', 10)
         
         self.last_gripper_val = -1.0 
+        
+        # [Safety] Subscribe to actual robot state
+        self.current_joints = None
+        self.sub_joints = self.node.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
+
+    def joint_state_callback(self, msg):
+        # UR driver publishes all joints. We need to extract the 6 we care about.
+        # Order in UR driver: shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3
+        # But msg.name might be in different order? Usually it matches.
+        # For robustness, we map by name if possible, or assume standard order.
+        # Assuming standard UR driver order for now.
+        try:
+            # Map names to positions
+            state_dict = {name: pos for name, pos in zip(msg.name, msg.position)}
+            current_pos = []
+            for name in self.joint_names:
+                if name in state_dict:
+                    current_pos.append(state_dict[name])
+            
+            if len(current_pos) == 6:
+                self.current_joints = current_pos
+        except Exception:
+            pass
 
     def move_joints(self, joint_positions: list):
         if JointTrajectory is None: 
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported! Cannot move robot.")
             return
+
+        # [Safety] Verify deviation
+        duration_sec = 0.033 # 30ms (Tracking Mode)
+        
+        if self.current_joints is not None:
+            max_diff = 0.0
+            for i in range(6):
+                diff = abs(joint_positions[i] - self.current_joints[i])
+                if diff > max_diff: max_diff = diff
+            
+            # If deviation > 0.1 rad (~6 degrees), move SLOWLY.
+            # This handles the initial "Snap to Home" safely.
+            if max_diff > 0.2:
+                duration_sec = 2.0
+                self.node.get_logger().warn(f"[Safety] Large Deviation ({max_diff:.2f} rad). Moving Slowly (2.0s)...")
+            elif max_diff > 0.05:
+                duration_sec = 0.5 # Medium correction
+        
         msg = JointTrajectory()
         msg.header = Header()
         msg.header.stamp = self.node.get_clock().now().to_msg()
@@ -109,12 +150,11 @@ class RealRobotInterface(RobotInterface):
         
         point = JointTrajectoryPoint()
         point.positions = list(joint_positions)
-        point.time_from_start.sec = 0
-        point.time_from_start.nanosec = 33000000 # ~30ms target time (tunable)
+        point.time_from_start.sec = int(duration_sec)
+        point.time_from_start.nanosec = int((duration_sec - int(duration_sec)) * 1e9)
         
         msg.points = [point]
-        msg.points = [point]
-        self.node.get_logger().info(f"[RealRobot] Pub Traj: {joint_positions[0]:.2f} ...", throttle_duration_sec=1.0)
+        self.node.get_logger().info(f"[RealRobot] Pub Traj: {joint_positions[0]:.2f} (Time: {duration_sec}s)...", throttle_duration_sec=1.0)
         self.pub.publish(msg)
 
     def move_gripper(self, value: float):
