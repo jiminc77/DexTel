@@ -99,7 +99,9 @@ class RealRobotInterface(RobotInterface):
         self.last_gripper_val = -1.0 
 
     def move_joints(self, joint_positions: list):
-        if JointTrajectory is None: return
+        if JointTrajectory is None: 
+            self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported! Cannot move robot.")
+            return
         msg = JointTrajectory()
         msg.header = Header()
         msg.header.stamp = self.node.get_clock().now().to_msg()
