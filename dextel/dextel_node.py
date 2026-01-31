@@ -101,8 +101,12 @@ class DexTelNode(Node):
         # 4. State Logic (Waiting, Calibrating, Active)
         target_joints, ui_status, ui_color = self.process_state_logic(state)
 
+
         # 5. Publish to Robot
         gripper_val = self.get_gripper_val(state)
+        
+        # [DEBUG] Heartbeat log every 2 seconds
+        self.get_logger().info(f"Loop Alive. State: {ui_status}. Target Found? {target_joints is not None}", throttle_duration_sec=2.0)
         
         if target_joints is not None:
             if isinstance(self.robot, SimRobotInterface):
