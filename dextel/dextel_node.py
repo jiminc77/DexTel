@@ -12,6 +12,7 @@ from dextel.retargeting import RetargetingWrapper
 from dextel.robot_interface import SimRobotInterface, RealRobotInterface
 
 # Calibration States
+STATE_HOMING = -1
 STATE_WAITING = 0
 STATE_CALIBRATING = 1
 STATE_ACTIVE = 2
@@ -75,7 +76,8 @@ class DexTelNode(Node):
         self.get_logger().info("DexTel Node Ready.")
 
         # State
-        self.state = STATE_WAITING
+        self.state = STATE_HOMING # Start with Homing
+        self.last_homing_cmd_time = 0.0
         self.origin_hand_pos = None
         self.origin_hand_rot = None
         self.calib_start_time = 0.0
@@ -93,8 +95,8 @@ class DexTelNode(Node):
 
         # 2. Vision Update
         img, state = self.tracker.process_frame()
-        if img is None: return
-
+        # if img is None: return # Don't return, keep logic running even if cam fails (for robot safety)
+        
         # 3. Input Handling
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
@@ -109,20 +111,35 @@ class DexTelNode(Node):
         # 5. Publish to Robot
         gripper_val = self.get_gripper_val(state)
         
-        
+        # Only move joints if they are updated
         if target_joints is not None:
-            if isinstance(self.robot, SimRobotInterface):
-                self.robot.publish_full_state(target_joints, gripper_val)
+            # Special Homing Handling: Don't spam
+            if self.state == STATE_HOMING:
+                now = time.time()
+                if now - self.last_homing_cmd_time > 4.0: # Send every 4s
+                    self.get_logger().info("Homing: Sending Home Trajectory...")
+                    if isinstance(self.robot, SimRobotInterface):
+                        self.robot.publish_full_state(target_joints, gripper_val)
+                    else:
+                        self.robot.move_joints(target_joints)
+                        self.robot.move_gripper(gripper_val)
+                    self.last_homing_cmd_time = now
             else:
-                self.robot.move_joints(target_joints)
-                self.robot.move_gripper(gripper_val)
+                # Normal Operation
+                if isinstance(self.robot, SimRobotInterface):
+                    self.robot.publish_full_state(target_joints, gripper_val)
+                else:
+                    self.robot.move_joints(target_joints)
+                    # Don't spam gripper unless changed (handled in interface)
+                    self.robot.move_gripper(gripper_val)
 
         # 6. UI Update
-        if state or img is not None:
-            try:
-                draw_ui_overlay(img, state, ui_status, ui_color)
-            except: pass
-        cv2.imshow("DexTel Control", img)
+        if img is not None:
+            if state:
+                try:
+                     draw_ui_overlay(img, state, ui_status, ui_color)
+                except: pass
+            cv2.imshow("DexTel Control", img)
 
     def handle_reset(self, state):
         if state is not None:
@@ -150,7 +167,29 @@ class DexTelNode(Node):
         if not self.retargeting_enabled:
             return None, "NO IK", (0, 0, 255)
 
-        if self.state == STATE_WAITING:
+        if self.state == STATE_HOMING:
+            target_q = self.home_joints
+            status = "ROBOT HOMING..."
+            color = (255, 0, 255)
+            
+            # Check convergence
+            if isinstance(self.robot, RealRobotInterface):
+                curr = self.robot.get_current_joints()
+                if curr is not None:
+                    # Calculate max deviation
+                    max_diff = np.max(np.abs(np.array(curr) - np.array(self.home_joints)))
+                    status = f"HOMING... Error: {max_diff:.2f}"
+                    
+                    if max_diff < 0.1:
+                        self.state = STATE_WAITING
+                        self.get_logger().info("Robot Homing Complete. Ready.")
+                else:
+                    status = "HOMING... (No Feedback)"
+            else:
+                # Sim: instant
+                self.state = STATE_WAITING
+        
+        elif self.state == STATE_WAITING:
             target_q = self.home_joints
             self.q_filtered = target_q
             status = "WAITING (Press R)"

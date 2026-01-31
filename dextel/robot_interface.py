@@ -72,6 +72,9 @@ class SimRobotInterface(RobotInterface):
     def move_gripper(self, value: float):
         pass
 
+    def get_current_joints(self):
+        return None # Sim doesn't subscribe to state yet
+
 # Conditional Imports for Gripper Topic
 try:
     from std_msgs.msg import Float32
@@ -156,6 +159,9 @@ class RealRobotInterface(RobotInterface):
         msg.points = [point]
         self.node.get_logger().info(f"[RealRobot] Pub Traj: {joint_positions[0]:.2f} (Time: {duration_sec}s)...", throttle_duration_sec=1.0)
         self.pub.publish(msg)
+
+    def get_current_joints(self):
+        return self.current_joints
 
     def move_gripper(self, value: float):
         # Value: 0.0 (Closed) -> 1.0 (Open)
