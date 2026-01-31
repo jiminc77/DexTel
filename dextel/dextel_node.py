@@ -152,7 +152,7 @@ class DexTelNode(Node):
             self.calib_start_time = time.time()
             self.calib_samples_pos = []
             self.calib_samples_rot = []
-            self.q_filtered = None 
+            # Don't clear q_filtered; hold position
             self.get_logger().info("Starting Calibration (2s)...")
         else:
             self.state = STATE_WAITING
@@ -221,8 +221,9 @@ class DexTelNode(Node):
             color = (0, 165, 255)
 
         elif self.state == STATE_CALIBRATING:
-            target_q = self.home_joints
-            self.q_filtered = target_q
+            # Freeze at current position (q_filtered) or Home if startup
+            target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
+            
             elapsed = time.time() - self.calib_start_time
             remaining = max(0.0, 2.0 - elapsed)
             status = f"CALIB... {remaining:.1f}s"
@@ -236,10 +237,17 @@ class DexTelNode(Node):
                 if len(self.calib_samples_pos) > 0:
                     self.origin_hand_pos = np.mean(self.calib_samples_pos, axis=0)
                     self.origin_hand_rot = self.calib_samples_rot[-1] 
-                    self.retargeting.reset_state(self.home_joints)
+                    
+                    # [FEATURE] Re-Center Robot Reference
+                    # Map (Current Hand Pos) -> (Current Held Robot Pos)
+                    pos, rot = self.retargeting.compute_fk(target_q)
+                    self.robot_home_pos = pos
+                    self.robot_home_rot = rot
+                    
+                    self.retargeting.reset_state(target_q)
                     self.state = STATE_ACTIVE
                     self.last_hand_seen_time = time.time()
-                    self.get_logger().info("Calibration Done.")
+                    self.get_logger().info("Calibration Done. Ref Centered.")
                 else:
                     self.state = STATE_WAITING
                     self.get_logger().warn("Calibration Failed.")
