@@ -39,11 +39,15 @@ class DexTelNode(Node):
         
         # Robot Interface
         if self.use_real:
+            print("\n*** [DEXTEL] LAUNCHING IN REAL ROBOT MODE ***")
             self.get_logger().info("MODE: REAL ROBOT")
             self.robot = RealRobotInterface(self)
         else:
+            print("\n*** [DEXTEL] LAUNCHING IN SIMULATION MODE ***")
             self.get_logger().info("MODE: SIMULATION")
             self.robot = SimRobotInterface(self)
+        
+        self.get_logger().info(f"Argument 'use_real': {self.use_real}")
 
         # Retargeting
         # [base, shoulder_lift, elbow, wrist1, wrist2, wrist3]
