@@ -69,6 +69,9 @@ class SimRobotInterface(RobotInterface):
         msg.position = list(arm_joints) + [gripper_val, gripper_val]
         self.pub.publish(msg)
 
+    def move_gripper(self, value: float):
+        pass
+
 # Conditional Imports for Gripper Topic
 try:
     from std_msgs.msg import Float32
