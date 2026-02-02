@@ -116,9 +116,8 @@ class DexTelNode(Node):
         
         self.movement_scale = 1.5 
         
-        # [Threading Setup]
-        # Vision is slow (~55ms), so we run it in a separate thread.
-        # Control loop can then run fast (60Hz) to keep the robot smooth.
+        # Vision Threading Setup
+        # Run vision in background to maintain 60Hz control loop
         import threading
         self.lock = threading.Lock()
         self.latest_state = None
@@ -149,7 +148,7 @@ class DexTelNode(Node):
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
             self.robot_home_rot = rot
-        # img, state = self.tracker.process_frame() # MOVED TO THREAD
+
         
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
@@ -159,21 +158,11 @@ class DexTelNode(Node):
             return
         elif key & 0xFF == ord('r'):
             self.handle_reset(state)
-        elif key & 0xFF == ord('t'):
-            self.debug_freeze = not getattr(self, 'debug_freeze', False)
-            if self.debug_freeze:
-                self.frozen_joints = self.q_filtered if self.q_filtered is not None else self.home_joints
-                self.get_logger().warn("[DEBUG] TARGET FROZEN (Test Jitter)")
-            else:
-                self.get_logger().info("[DEBUG] TARGET UNFROZEN")
+
 
         target_joints, ui_status, ui_color = self.process_state_logic(state)
         
-        # [DEBUG] Override logic for freeze test
-        if getattr(self, 'debug_freeze', False):
-             target_joints = self.frozen_joints
-             ui_status = "DEBUG: FROZEN"
-             ui_color = (255, 255, 0)
+
         gripper_val = self.get_gripper_val(state)
         
         if target_joints is not None:

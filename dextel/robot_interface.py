@@ -102,18 +102,7 @@ class RealRobotInterface(RobotInterface):
         
         duration_sec = max(min_duration, max_diff / max_vel)
         
-        # [Debug Logging] Check for timing jitter vs vision noise
-        now = self.node.get_clock().now().nanoseconds / 1e9
-        dt = now - getattr(self, '_last_cmd_time', now)
-        self._last_cmd_time = now
-        
-        # Log every 1 second (approx every 60 frames)
-        if not hasattr(self, '_log_counter'): self._log_counter = 0
-        self._log_counter += 1
-        if self._log_counter % 60 == 0:
-            self.node.get_logger().info(
-                f"[DEBUG] dt={dt*1000:.1f}ms (expected ~16ms) | Dur={duration_sec:.2f}s | MaxDiff={max_diff:.4f} rad"
-            )
+
 
         msg = JointTrajectory()
         msg.header = Header()
