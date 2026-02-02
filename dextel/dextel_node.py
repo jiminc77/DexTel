@@ -59,20 +59,14 @@ class OneEuroFilter:
 class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
-        # ... (Previous init code)
-        
-        # [Filter Config]
-        # min_cutoff: Minimum cutoff frequency (lower = smoother when static)
-        # beta: Speed coefficient (higher = faster response when moving)
-        # Tuned for "Creamy" motion:
+
         self.joint_filter = None 
+        self.joint_filters = None # Initialize list of filters
         self.filter_min_cutoff = 0.05  # Very smooth when still (0.05Hz)
         self.filter_beta = 2.0         # Responsive when moving fast
         
-    # ... (Rest of methods)
-
-
         self.declare_parameter('use_real', False)
+        self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
         
         self.use_real = self.get_parameter('use_real').get_parameter_value().bool_value
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
@@ -331,7 +325,7 @@ class DexTelNode(Node):
             
             # [OneEuroFilter Application]
             now = time.time()
-            if self.q_filtered is None:
+            if self.joint_filters is None:
                  self.q_filtered = q_raw
                  self.joint_filters = [
                      OneEuroFilter(now, q_raw[i], min_cutoff=self.filter_min_cutoff, beta=self.filter_beta) 
