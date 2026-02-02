@@ -84,8 +84,21 @@ class DexTelNode(Node):
             rclpy.shutdown(); return
         elif key & 0xFF == ord('r'):
             self.handle_reset(state)
+        elif key & 0xFF == ord('t'):
+            self.debug_freeze = not getattr(self, 'debug_freeze', False)
+            if self.debug_freeze:
+                self.frozen_joints = self.q_filtered if self.q_filtered is not None else self.home_joints
+                self.get_logger().warn("[DEBUG] TARGET FROZEN (Test Jitter)")
+            else:
+                self.get_logger().info("[DEBUG] TARGET UNFROZEN")
 
         target_joints, ui_status, ui_color = self.process_state_logic(state)
+        
+        # [DEBUG] Override logic for freeze test
+        if getattr(self, 'debug_freeze', False):
+             target_joints = self.frozen_joints
+             ui_status = "DEBUG: FROZEN"
+             ui_color = (255, 255, 0)
         gripper_val = self.get_gripper_val(state)
         
         if target_joints is not None:
