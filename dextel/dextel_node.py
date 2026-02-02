@@ -135,18 +135,17 @@ class DexTelNode(Node):
              # [Speed Config]
             # Homing: Faster (e.g. 1.0 rad/s) for efficiency
             # Tracking: Slower (e.g. 0.5 rad/s) for safety/smoothness
-            max_vel = 0.5
+            max_vel = 1
             if self.state == STATE_HOMING:
-                max_vel = 0.25
+                max_vel = 0.25 # Consistent with user setting
                 now = time.time()
-                # Update homing every 0.1s for smoothness
-                if now - self.last_homing_cmd_time > 0.1: 
-                     if isinstance(self.robot, SimRobotInterface):
-                        self.robot.publish_full_state(target_joints, gripper_val)
-                     else:
-                        self.robot.move_joints(target_joints, max_vel=max_vel)
-                        self.robot.move_gripper(gripper_val)
-                     self.last_homing_cmd_time = now
+                # Remove throttle, update at 60Hz (full speed control loop)
+                if isinstance(self.robot, SimRobotInterface):
+                   self.robot.publish_full_state(target_joints, gripper_val)
+                else:
+                   self.robot.move_joints(target_joints, max_vel=max_vel)
+                   self.robot.move_gripper(gripper_val)
+                self.last_homing_cmd_time = now
             else:
                 # Active Tracking
                 if isinstance(self.robot, SimRobotInterface):
