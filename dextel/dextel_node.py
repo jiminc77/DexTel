@@ -70,18 +70,48 @@ class DexTelNode(Node):
         self.last_hand_seen_time = 0.0
         
         self.movement_scale = 1.5 
+        
+        # [Threading Setup]
+        # Vision is slow (~55ms), so we run it in a separate thread.
+        # Control loop can then run fast (60Hz) to keep the robot smooth.
+        import threading
+        self.lock = threading.Lock()
+        self.latest_state = None
+        self.latest_img = None
+        self.running = True
+        self.vision_thread = threading.Thread(target=self.vision_loop)
+        self.vision_thread.start()
+
+    def vision_loop(self):
+        while self.running:
+            img, state = self.tracker.process_frame()
+            with self.lock:
+                self.latest_img = img
+                self.latest_state = state
+            # Sleep slightly to prevent CPU hogging if tracker is too fast (unlikely)
+            time.sleep(0.001)
 
     def control_loop(self):
+        # 1. Get latest data from thread
+        state = None
+        img = None
+        with self.lock:
+            state = self.latest_state
+            img = self.latest_img
+        
+        # 2. Logic (Calibration, Retargeting)
         if self.robot_home_pos is None and self.retargeting_enabled:
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
             self.robot_home_rot = rot
-
-        img, state = self.tracker.process_frame()
+        # img, state = self.tracker.process_frame() # MOVED TO THREAD
         
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
-            rclpy.shutdown(); return
+            self.running = False
+            self.vision_thread.join()
+            rclpy.shutdown()
+            return
         elif key & 0xFF == ord('r'):
             self.handle_reset(state)
         elif key & 0xFF == ord('t'):
@@ -102,21 +132,26 @@ class DexTelNode(Node):
         gripper_val = self.get_gripper_val(state)
         
         if target_joints is not None:
+             # [Speed Config]
+            # Homing: Faster (e.g. 1.0 rad/s) for efficiency
+            # Tracking: Slower (e.g. 0.5 rad/s) for safety/smoothness
             if self.state == STATE_HOMING:
+                max_vel = 0.25
                 now = time.time()
-                if now - self.last_homing_cmd_time > 4.0:
-                    self.get_logger().info("Homing: Sending Home Trajectory...")
-                    if isinstance(self.robot, SimRobotInterface):
+                # Update homing every 0.1s for smoothness
+                if now - self.last_homing_cmd_time > 0.1: 
+                     if isinstance(self.robot, SimRobotInterface):
                         self.robot.publish_full_state(target_joints, gripper_val)
-                    else:
-                        self.robot.move_joints(target_joints)
+                     else:
+                        self.robot.move_joints(target_joints, max_vel=max_vel)
                         self.robot.move_gripper(gripper_val)
-                    self.last_homing_cmd_time = now
+                     self.last_homing_cmd_time = now
             else:
+                # Active Tracking
                 if isinstance(self.robot, SimRobotInterface):
                     self.robot.publish_full_state(target_joints, gripper_val)
                 else:
-                    self.robot.move_joints(target_joints)
+                    self.robot.move_joints(target_joints, max_vel=max_vel)
                     self.robot.move_gripper(gripper_val)
 
         if img is not None:

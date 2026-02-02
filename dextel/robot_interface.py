@@ -77,14 +77,12 @@ class RealRobotInterface(RobotInterface):
         except Exception:
             pass
 
-    def move_joints(self, joint_positions: list):
+    def move_joints(self, joint_positions: list, max_vel: float = 0.5):
         if JointTrajectory is None: 
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported!")
             return
 
-        max_vel = 0.5
         min_duration = 0.25 
-        
         max_diff = 0.0
         final_goals = list(joint_positions)
         
