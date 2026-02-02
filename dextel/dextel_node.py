@@ -62,8 +62,8 @@ class DexTelNode(Node):
 
         self.joint_filter = None 
         self.joint_filters = None # Initialize list of filters
-        self.filter_min_cutoff = 0.05  # Very smooth when still (0.05Hz)
-        self.filter_beta = 2.0         # Responsive when moving fast
+        self.filter_min_cutoff = 0.1   # Increased slightly for better baseline tracking
+        self.filter_beta = 0.05        # Drastically reduced to ignore velocity noise (Smooth!)
         
         self.declare_parameter('use_real', False)
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
@@ -189,11 +189,13 @@ class DexTelNode(Node):
                     self.robot.move_gripper(gripper_val)
 
         if img is not None:
+            # COPY image to prevent flickering (since we draw on it and reuse it)
+            display_img = img.copy()
             if state:
                 try:
-                    draw_ui_overlay(img, state, ui_status, ui_color)
+                    draw_ui_overlay(display_img, state, ui_status, ui_color)
                 except Exception: pass
-            cv2.imshow("DexTel Control", img)
+            cv2.imshow("DexTel Control", display_img)
 
     def handle_reset(self, state):
         if state is not None:

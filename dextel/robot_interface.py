@@ -82,7 +82,7 @@ class RealRobotInterface(RobotInterface):
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported!")
             return
 
-        min_duration = 0.5
+        min_duration = 0.1 # Reduced from 0.5s to 0.1s for responsiveness (~6Hz updates effectively)
         max_diff = 0.0
         final_goals = list(joint_positions)
         
