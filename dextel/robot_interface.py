@@ -82,30 +82,27 @@ class RealRobotInterface(RobotInterface):
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported!")
             return
 
-        duration_sec = 0.1
+        max_vel = 1.5
+        min_duration = 0.25
+        
+        max_diff = 0.0
         final_goals = list(joint_positions)
         
         if self.current_joints is not None:
-            max_diff = 0.0
             for i in range(6):
                 curr = self.current_joints[i]
                 tgt = final_goals[i]
-                diff_raw = tgt - curr
                 
+                diff_raw = tgt - curr
                 k = round(diff_raw / (2 * np.pi))
                 tgt_new = tgt - k * 2 * np.pi
                 final_goals[i] = tgt_new
                 
                 diff = abs(tgt_new - curr)
-                if diff > max_diff: max_diff = diff
-            
-            if max_diff > 0.5:
-                duration_sec = 2.0
-                self.node.get_logger().warn(f"[Safety] Huge Deviation ({max_diff:.2f} rad). Slowing down.")
-            elif max_diff > 0.15:
-                duration_sec = 0.25 
-            else:
-                duration_sec = 0.1 
+                if diff > max_diff:
+                    max_diff = diff
+        
+        duration_sec = max(min_duration, max_diff / max_vel)
         
         msg = JointTrajectory()
         msg.header = Header()

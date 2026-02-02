@@ -56,7 +56,7 @@ class DexTelNode(Node):
         self.q_filtered = None
         self.alpha = 0.15 
 
-        self.timer = self.create_timer(1.0/30.0, self.control_loop)
+        self.timer = self.create_timer(1.0/60.0, self.control_loop)
         self.get_logger().info("DexTel Node Ready.")
 
         self.state = STATE_HOMING
