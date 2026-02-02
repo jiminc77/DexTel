@@ -16,11 +16,62 @@ STATE_WAITING = 0
 STATE_CALIBRATING = 1
 STATE_ACTIVE = 2
 
+class OneEuroFilter:
+    def __init__(self, t0, x0, dx0=0.0, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
+        self.t_prev = t0
+        self.x_prev = x0
+        self.dx_prev = dx0
+        self.min_cutoff = min_cutoff
+        self.beta = beta
+        self.d_cutoff = d_cutoff
+        self.alpha_correction = 0.1 # Smoothing factor for calculated alpha to prevent jumps
+
+    def smoothing_factor(self, t_e, cutoff):
+        r = 2 * np.pi * cutoff * t_e
+        return r / (r + 1)
+
+    def exponential_smoothing(self, a, x, x_prev):
+        return a * x + (1 - a) * x_prev
+
+    def __call__(self, t, x):
+        t_e = t - self.t_prev
+        if t_e <= 0: return self.x_prev 
+        
+        # Estimate derivative (velocity)
+        a_d = self.smoothing_factor(t_e, self.d_cutoff)
+        dx = (x - self.x_prev) / t_e
+        dx_hat = self.exponential_smoothing(a_d, dx, self.dx_prev)
+        
+        # Calculate dynamic cutoff frequency
+        # Low velocity -> Low cutoff (High smoothing)
+        # High velocity -> High cutoff (Low smoothing, fast response)
+        cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
+        a = self.smoothing_factor(t_e, cutoff)
+        
+        x_hat = self.exponential_smoothing(a, x, self.x_prev)
+        
+        self.t_prev = t
+        self.x_prev = x_hat
+        self.dx_prev = dx_hat
+        
+        return x_hat
+
 class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
+        # ... (Previous init code)
         
-        self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
+        # [Filter Config]
+        # min_cutoff: Minimum cutoff frequency (lower = smoother when static)
+        # beta: Speed coefficient (higher = faster response when moving)
+        # Tuned for "Creamy" motion:
+        self.joint_filter = None 
+        self.filter_min_cutoff = 0.05  # Very smooth when still (0.05Hz)
+        self.filter_beta = 2.0         # Responsive when moving fast
+        
+    # ... (Rest of methods)
+
+
         self.declare_parameter('use_real', False)
         
         self.use_real = self.get_parameter('use_real').get_parameter_value().bool_value
@@ -278,8 +329,19 @@ class DexTelNode(Node):
                 q_raw = self.q_filtered if self.q_filtered is not None else self.home_joints
                 self.retargeting.reset_state(q_raw)
             
-            if self.q_filtered is None: self.q_filtered = q_raw
-            else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
+            # [OneEuroFilter Application]
+            now = time.time()
+            if self.q_filtered is None:
+                 self.q_filtered = q_raw
+                 self.joint_filters = [
+                     OneEuroFilter(now, q_raw[i], min_cutoff=self.filter_min_cutoff, beta=self.filter_beta) 
+                     for i in range(6)
+                 ]
+            else:
+                filtered_list = []
+                for i in range(6):
+                    filtered_list.append(self.joint_filters[i](now, q_raw[i]))
+                self.q_filtered = np.array(filtered_list)
             
             target_q = self.q_filtered
         else:

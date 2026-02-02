@@ -82,7 +82,7 @@ class RealRobotInterface(RobotInterface):
             self.node.get_logger().error("CRITICAL: trajectory_msgs.JointTrajectory not imported!")
             return
 
-        min_duration = 0.5 # Increased to 0.5s for maximum smoothness 
+        min_duration = 0.5
         max_diff = 0.0
         final_goals = list(joint_positions)
         
@@ -100,7 +100,6 @@ class RealRobotInterface(RobotInterface):
                 if diff > max_diff:
                     max_diff = diff
         
-        # Duration = distance / velocity, clamped at min_duration
         duration_sec = max(min_duration, max_diff / max_vel)
         
         # [Debug Logging] Check for timing jitter vs vision noise
