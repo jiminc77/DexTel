@@ -1,190 +1,147 @@
-# Environment Guide (Ubuntu 24.04 + RTX 5090)
+# Phase 1: Environment Setup & Vision
 
-## 1. System Prerequisites
+**Goal**: Set up a fresh Ubuntu machine for Deep Learning and Robotics, and establish a robust vision pipeline (`HaMeR` + `RealSense`).
 
-### NVIDIA Driver & CUDA
+---
 
-Ensure the latest drivers supporting the Blackwell architecture are installed.
+## Part A: Environment Setup
+**Target System**: Ubuntu 24.04 (Noble) + NVIDIA RTX 4090/5090.
 
+### 1. System Prerequisites
+
+#### NVIDIA Driver & CUDA
+Ensure the latest drivers supporting your architecture (e.g., Blackwell/Ada) are installed.
 ```bash
 # Verify Driver (Target: 580.xx+) and CUDA (Target: 12.8+)
 nvidia-smi
 nvcc --version
 ```
 
-### System Utilities
-
-Install basic build tools required for ROS and Python extensions.
-
+#### System Utilities
+Install build tools required for ROS 2 and Python extensions.
 ```bash
 sudo apt update
-sudo apt install -y build-essential gcc-11 g++-11 git curl python3-pip
+sudo apt install -y build-essential gcc-11 g++-11 git curl python3-pip net-tools
 ```
 
----
-
-## 2. Install ROS 2 Jazzy
-
-### Installation
+### 2. Install ROS 2 Jazzy
+We use **ROS 2 Jazzy Jalisco** (Native Shared Memory) for low-latency communication.
 
 ```bash
-# 1. Enable Ubuntu Universe repository
+# 1. Enable Universe Repo
 sudo apt install software-properties-common
 sudo add-apt-repository universe
 
-# 2. Add the ROS 2 GPG key
+# 2. Add ROS 2 GPG Key
 sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
 
-# 3. Add the repository to sources list
+# 3. Add Repository
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
-# 4. Install ROS 2 Jazzy Desktop (includes RViz2, demos)
+# 4. Install ROS 2 Jazzy Desktop
 sudo apt update
-sudo apt install -y ros-jazzy-desktop
-sudo apt install -y python3-colcon-common-extensions python3-rosdep
+sudo apt install -y ros-jazzy-desktop python3-colcon-common-extensions python3-rosdep
 
 # 5. Initialize rosdep
 sudo rosdep init
 rosdep update
 
+# 6. Environment Setup
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
 echo "export RMW_IMPLEMENTATION=rmw_fastrtps_cpp" >> ~/.bashrc
 echo "export ROS_DOMAIN_ID=0" >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### Environment Setup
-
+#### Install RealSense Drivers
 ```bash
-echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
-source ~/.bashrc
-```
-
-### Install Peripheral Packages (RealSense, etc.)
-
-```bash
-# Install RealSense wrappers for Jazzy
 sudo apt install -y ros-jazzy-realsense2-camera ros-jazzy-realsense2-description
 ```
 
-## 3. AI & Vision Environment (PyTorch Nightly)
-
-Create a dedicated Conda environment for the Vision Pipeline to avoid conflicts with system Python.
+### 3. AI & Vision Environment (Conda)
+We use a dedicated Conda environment to handle PyTorch and HaMeR dependencies without conflicting with ROS system packages.
 
 ```bash
-# 1. Install Miniconda (if not installed)
+# 1. Install Miniconda
 mkdir -p ~/miniconda3
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
 bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
-rm -rf ~/miniconda3/miniconda.sh
 ~/miniconda3/bin/conda init bash
 source ~/.bashrc
 
-# 2. Create Environment
-conda create -n isaac python=3.11 -y
+# 2. Create 'isaac' Environment
+conda create -n isaac python=3.10 -y
 conda activate isaac
 
-# 3. Install PyTorch Nightly (Required for RTX 5090 / Blackwell support)
-# Use the nightly index for CUDA 12.8 compatibility
-pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# 2. Key Libraries
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install mediapipe pyrealsense2 opencv-python numpy scipy
+pip install pinocchio
+pip install dex-retargeting --no-deps 
+# Note: dex-retargeting is installed for util functions, but we use custom logic.
 
-# 4. Verify Installation
-python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0)}')"
-
+# Verify usage
+python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ```
 
-## 4. Isaac Sim 5.0 Installation
-
-Install Isaac Sim within the Conda environment or global pip, ensuring GCC compatibility.
+### 4. Install HaMeR (Hand Mesh Recovery)
+HaMeR is used for 3D Keypoint estimation.
 
 ```bash
-# Activate your env
-conda activate isaac
+# 1. Clone Dependencies
+cd ~/workspace/ros2_ws/src
+git clone https://github.com/geopavlakos/hamer.git
 
-# Install Isaac Sim 5.0
-pip3 install --upgrade pip
-pip3 install isaacsim==5.0.0 --extra-index-url https://pypi.nvidia.com
+# 2. Install HaMeR
+cd hamer
+pip install -e .
+pip install webdataset hydra-core pyrootutils rich smplx==0.1.28 chumpy
 
-# First Run (Downloads assets and generates cache)
-isaacsim
+# 3. Download Models
+mkdir -p _DATA/data/mano
+# Download HaMeR Checkpoints
+wget https://www.cs.utexas.edu/~pavlakos/hamer/data/hamer_demo_data.tar.gz
+tar -xvf hamer_demo_data.tar.gz
+# Download MANO Hand Model
+wget -O _DATA/data/mano/MANO_RIGHT.pkl https://huggingface.co/camenduru/HandRefiner/resolve/main/MANO_RIGHT.pkl
+
+# 4. Link Data to DexTel
+cd ~/workspace/ros2_ws/src/dextel/dextel
+ln -s ../../hamer/_DATA _DATA
+```
+
+### 5. Install Isaac Sim 4.5/5.0
+```bash
+pip install isaacsim==5.0.0 --extra-index-url https://pypi.nvidia.com
 ```
 
 ---
 
-## 5. Workspace Setup
+## Part B: Vision Pipeline Implementation
+**Script**: `dextel/ur3_realsense_hamer.py`
 
-Set up your development workspace for `isaac`.
+Once the environment is set up, we implement the `RobustTracker` class.
 
-```bash
-# 1. Create Workspace
-mkdir -p ~/workspace/ros2_ws/src
-cd ~/workspace/ros2_ws
+### 1. Key Logic
+-   **MediaPipe**: Used for 2D ROI finding (fast).
+-   **HaMeR**: Run inference on the ROI to get 3D Mesh.
+-   **Depth Fusion**: Use `RealSense` Depth frame to calculate the absolute Z-distance of the wrist.
+-   **Smoothing**: Apply `OneEuroFilter` to `(x,y,z)` position and `quaternion` rotation to remove jitter.
 
-# 2. Build (Empty workspace test)
-colcon build --symlink-install
-
-# 3. Source the workspace
-echo "source ~/workspace/ros2_ws/install/setup.bash" >> ~/.bashrc
-source ~/.bashrc
-```
-
-## 6. Connection & Communication Test (Sim ↔ ROS 2)
-
-### 1. Configuration Check
-
-Ensure both terminals (Sim and ROS) share the same Domain ID.
+### 2. Verification
+Test if the vision system is working standalone.
 
 ```bash
-export ROS_DOMAIN_ID=0
+# 1. Activate Environment
+conda activate isaac
+source /opt/ros/jazzy/setup.bash
+
+# 2. Run Vision Script
+python3 -m dextel.ur3_realsense_hamer
 ```
 
-### 2. Configure Isaac Sim (Graph Setup)
-
-1. Launch Isaac Sim: `isaacsim`
-2. Enable ROS 2 Bridge:
-    - Go to `Window` -> `Extensions`.
-    - Search for `isaac.ros2_bridge`.
-    - Ensure it is **Enabled**.
-3. Create Action Graph (To publish camera data):
-    - `Window` $\rightarrow$ `Graph Editors` $\rightarrow$ `Action Graph`.
-    - Add the following nodes and connect them:
-        
-        ![image.png](attachment:da6c4f60-cf7c-42d7-bb82-0884efea01ea:image.png)
-        
-        - On Playback Tick $\rightarrow$ Isaac Create Render Product $\rightarrow$ ROS2 Camera Helper.
-    - Create Camera:
-        - `Create` $\rightarrow$`Camera`
-    - Configure ROS2 Camera Helper:
-        - `Topic Name`: `/camera/color/image_raw`
-        - `Type`: `rgb`
-    - Configure Isaac Create Render Prodcut:
-        - cameraPrim: Camera
-4. Add Cube
-    - `Create` $\rightarrow$ `Mesh` $\rightarrow$ `Cube` (If you can’t see the cube, press F)
-5. Press Play in Isaac Sim.
-
-### 3. Verify in ROS 2 Jazzy (Terminal)
-
-Open a new terminal and verify the topic.
-
-```bash
-# Check if the topic exists
-ros2 topic list
-# Should see: /camera/color/image_raw
-
-# Check data frequency
-ros2 topic hz /camera/color/image_raw
-```
-
-### 4. Visualize (RViz2)
-
-Since you are on the Host, you can simply run RViz2.
-
-```bash
-rviz2
-```
-
-1. Click **Add** (bottom left).
-2. Select **By Topic**.
-3. Select `/camera/color/image_raw` $\rightarrow$ **Image**.
-4. If you see the cube, the process was successful.
+**Checklist**:
+- [ ] UI Window opens.
+- [ ] Hand skeleton (Red/Green/Blue axes) aligns with your hand.
+- [ ] "Pinch" state changes when you tap thumb and index.
+- [ ] FPS is acceptable (>30Hz).

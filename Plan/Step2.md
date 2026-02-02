@@ -1,177 +1,67 @@
-### Prerequisites (From Step 1/Env Setup)
-- Ubuntu 24.04
-- ROS 2 Jazzy Installed
-- RealSense SDK Installed
-- Python 3.10+ environment (Conda `isaac` env recommended)
+# Phase 2: Simulation & Retargeting
 
----
+**Goal**: Verify kinematic mapping and logic in a safe, simulated environment (Isaac Sim) before touching real hardware.
 
-## Vision Teleoperation System (RealSense + HaMeR)
+## 1. Retargeting (Inverse Kinematics)
 
-**MediaPipe** for fast 2D ROI detection and **HaMeR (Hand Mesh Recovery)** for accurate 3D pose estimation, fused with **RealSense** depth data.
+We utilize **Optimization-Based IK** (`dex-retargeting`) instead of analytic IK to handle the UR3e's limited workspace gracefully.
 
-### 1. Virtual Environment Setup & Dependencies Installation
+### Vector Optimization Strategy (`retargeting.py`)
+Instead of matching absolute position (which causes singularities), we align **Vectors**:
+1.  **Approach Vector**: Aligns Robot Tool Z-Axis with User's Index Finger direction.
+2.  **Normal Vector**: Aligns Robot Tool Y-Axis with User's Palm Normal.
+3.  **Position**: Aligns Robot Tool Origin with User's Wrist (Relative).
 
-- Environment Setup
-    
-    ```bash
-    sudo apt install python3-venv
-    
-    python3 -m venv --system-site-packages venv
-    
-    # Activate the virtual enviromnemt
-    source venv/bin/activate
-    
-    # Install Core Dependencies
-    pip3 install torch torchvision mediapipe==0.10.14 pyrealsense2 opencv-python numpy==1.26.4
-    ```
-    
-- Install HaMeR
-    
-    ```bash
-    cd ~/ros2_ws/src/dextel
-    
-    # Clone HaMeR repository
-    git clone https://github.com/geopavlakos/hamer.git
-    
-    # Install HaMeR
-    cd hamer
-    pip3 install -e .
-    pip3 install webdataset hydra-core pyrootutils rich smplx==0.1.28 chumpy
-    ```
-    
-- Download Model Data
-    
-    ```bash
-    cd ~/workspace/ros2_ws/src/dextel/hamer
-    
-    # 1. Download HaMeR Demo Data (Checkpoints)
-    wget https://www.cs.utexas.edu/~pavlakos/hamer/data/hamer_demo_data.tar.gz
-    tar -xvf hamer_demo_data.tar.gz
-    # 2. Download MANO Hand Model
-    mkdir -p _DATA/data/mano
-    wget -O _DATA/data/mano/MANO_RIGHT.pkl https://huggingface.co/camenduru/HandRefiner/resolve/main/MANO_RIGHT.pkl
-    
-    cd ~/workspace/ros2_ws/src/dextel/dextel
-    # Create a symbolic link to the data
-    ln -s ../hamer/_DATA _DATA
-    ```
-
-### 2. Vision Node Implementation (`ur3_realsense_hamer.py`)
-
-The `RobustTracker` class integrates the following components:
-
-1.  **Sensor Input**: RealSense D455 RGB-D stream (Aligned).
-2.  **ROI Detection**: MediaPipe Hands detects the hand to create a stable bounding box.
-3.  **3D Inference**: The **HaMeR** transformer model predicts dense 3D mesh and joint locations from the cropped image.
-4.  **Signal Processing**:
-    -   **Depth Fusion**: The wrist's true 3D position is determined by sampling the RealSense depth map at the wrist pixel and deprojecting it.
-    -   **Smoothing**: `OneEuroFilter` is applied to both the 3D position and the 3D rotation matrix to minimize jitter.
-5.  **Logic**:
-    -   **Coordinate Frame**: A robust wrist frame is calculated using the Wrist, Index-MCP, and Pinky-MCP joints.
-    -   **Pinch Detection**: A Schmitt Trigger (Hysteresis) monitors the Thumb-Index distance for gripper control (Close < 5cm, Open > 10cm).
-
-
-## Dex-Retargeting Implementation
-
-This is the most critical step. We will adapt the `VectorOptimizer` from `dex-retargeting` to solve for UR3 joint angles.
-
-### 1. URDF Loading
-
-The optimizer needs to know the robot's kinematic structure.
-
+**Code Highlight**:
 ```python
-# Load UR3e URDF using a library like 'pinocchio' or 'urdfpy'
-# Alternatively, dex-retargeting has its own loader.
-import pinocchio as pin
-
-urdf_path = "ur3e.urdf" # Ensure you have the UR3e URDF file
-robot = pin.RobotWrapper.BuildFromURDF(urdf_path)
-```
-
-### 2. Defining the Target
-
-We map human hand vectors to robot vectors.
-
-- **Human**: Wrist $\rightarrow$ Index MCP
-- **Robot**: End-Effector (`tool0`) Z-axis (Approach direction)
-
-- **Human**: Palm Normal
-- **Robot**: End-Effector (`tool0`) Y-axis (or X, depending on gripper mounting)
-
-### 3. Implementation of `Optimizer`
-
-```python
-from dex_retargeting.optimizer import VectorOptimizer
-
-# Define which link corresponds to the wrist/gripper
-target_link_name = "tool0"
-
-# Initialize Optimizer
-optimizer = VectorOptimizer(
-    robot=robot,
-    target_link_names=[target_link_name, target_link_name],
-    target_joint_names=["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]
-)
-
-# In the loop:
-# retargeting_result = optimizer.retarget(human_vectors)
-# robot_q = retargeting_result.q
+# dextel/retargeting.py
+target_vecs = np.vstack([target_pos, target_vec_z, target_vec_y])
+result_q = self.optimizer.retarget(target_vecs, ...)
 ```
 
 ---
 
-## Day 5: ROS 2 Integration
+## 2. Isaac Sim Setup (`sim_launch.py`)
 
-Now that we have the math working, we need to publish it to ROS 2 for the simulation to read.
+We created a custom launcher to automate the simulation environment.
 
-### 1. Node Structure
-
-Create a ROS 2 package `ur3_teleop`.
+### Features
+-   **Auto-Load Asset**: Loads `assets/ur3e_hande.usd` automatically.
+-   **ROS 2 Bridge**: Creates the Action Graph programmatically to:
+    -   Subscribe to `/target_joint_states` (Control).
+    -   Publish `/joint_states` (Feedback).
+-   **Gripper Config**: Applies high stiffness/damping `DriveAPI` to the gripper joints for stable grasping simulation.
 
 ```bash
-cd ~/workspace/ros2_ws/src
-ros2 pkg create --build-type ament_python ur3_teleop
-```
-
-### 2. Publisher Implementation
-
-- **Topic**: `/target_joint_states`
-- **Type**: `sensor_msgs/msg/JointState`
-- **Topic**: `/gripper_cmd` (Custom or float)
-- **Type**: `std_msgs/msg/Float32` (0.0 = Open, 1.0 = Closed)
-
-```python
-# ur3_teleop_node.py snippet
-
-msg = JointState()
-msg.name = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", 
-            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
-msg.position = computed_q_solution # From Optimizer
-msg.header.stamp = self.get_clock().now().to_msg()
-
-self.publisher_.publish(msg)
+# Launch Simulation
+python3 -m dextel.sim_launch
 ```
 
 ---
 
-## Day 6 & 7: Testing & Tuning
+## 3. Main Node Logic (`dextel_node.py`)
 
-### 1. Visual Verification (Rviz2)
-Visualize the robot model in Rviz2 and subscribe to `/target_joint_states`.
-- **Check 1 (Smoothness)**: Hold your hand still. The robot model in Rviz should NOT vibrate. If it does, decrease `min_cutoff` in OneEuroFilter.
-- **Check 2 (Latency)**: Move your hand quickly. The robot should follow without noticeable lag. If laggy, increase `beta` in OneEuroFilter.
-- **Check 3 (Singularity)**: Rotate your wrist 180 degrees. The UR3 should utilize its wrist joints to follow, without the whole arm flipping wildly.
+The `DexTelNode` orchestrates the flow. In simulation mode (`use_real:=False`), it:
 
-### 2. Gripper Tuning
-Calibrate the Pinch distance thresholds.
-- Measure the distance when your fingers are comfortably touching (~10mm).
-- Measure the distance when your hand is relaxed open (~100mm).
-- Set thresholds: `CLOSE_THRESH = 15mm`, `OPEN_THRESH = 80mm`.
+1.  Receives `HandState` from Vision.
+2.  Calculates `Target Pose` = `RobotHome` + `(HandPos - CalibrationOrigin)`.
+3.  Solves IK $\to$ `target_joints`.
+4.  Publishes to `/target_joint_states` (read by Isaac Sim Bridge).
+
+### Calibration State
+-   On startup, the user presses **'R'**.
+-   System records hand pose for 2 seconds.
+-   Establishes this as the "Zero Point" to map to the Robot's "Home Pose".
+-   Allows comfortable teleoperation regardless of where the user sits.
 
 ---
 
-## Deliverables for Week 1
-1.  **`ur3_teleop` ROS 2 Package**: Fully functional Python node.
-2.  **`config/ur3_retargeting.yml`**: Configuration file for the optimizer/URDF.
-3.  **Rviz2 Demo**: A video showing the UR3 ghost model following your hand in real-time.
+## 4. Verification
+
+1.  **Launch Sim**: `python3 -m dextel.sim_launch`
+2.  **Launch Node**: `python3 -m dextel.dextel_node`
+3.  **Test**:
+    -   Press 'R' to calibrate.
+    -   Move hand up/down $\to$ Robot moves up/down.
+    -   Rotate wrist $\to$ Robot wrist rotates smoothy.
+    -   Pinch $\to$ Sim gripper closes.
