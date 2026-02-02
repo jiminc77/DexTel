@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import time
 import os
+import threading
 from ament_index_python.packages import get_package_share_directory
 
 from dextel.ur3_realsense_hamer import RobustTracker, draw_ui_overlay
@@ -24,7 +25,7 @@ class OneEuroFilter:
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.d_cutoff = d_cutoff
-        self.alpha_correction = 0.1 # Smoothing factor for calculated alpha to prevent jumps
+        self.alpha_correction = 0.1
 
     def smoothing_factor(self, t_e, cutoff):
         r = 2 * np.pi * cutoff * t_e
@@ -37,14 +38,11 @@ class OneEuroFilter:
         t_e = t - self.t_prev
         if t_e <= 0: return self.x_prev 
         
-        # Estimate derivative (velocity)
         a_d = self.smoothing_factor(t_e, self.d_cutoff)
         dx = (x - self.x_prev) / t_e
         dx_hat = self.exponential_smoothing(a_d, dx, self.dx_prev)
         
-        # Calculate dynamic cutoff frequency
-        # Low velocity -> Low cutoff (High smoothing)
-        # High velocity -> High cutoff (Low smoothing, fast response)
+        cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
         cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
         a = self.smoothing_factor(t_e, cutoff)
         
@@ -61,9 +59,9 @@ class DexTelNode(Node):
         super().__init__('dextel_node')
 
         self.joint_filter = None 
-        self.joint_filters = None # Initialize list of filters
-        self.filter_min_cutoff = 0.1   # Increased slightly for better baseline tracking
-        self.filter_beta = 0.05        # Drastically reduced to ignore velocity noise (Smooth!)
+        self.joint_filters = None 
+        self.filter_min_cutoff = 0.1   
+        self.filter_beta = 0.05        
         
         self.declare_parameter('use_real', False)
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
@@ -116,9 +114,6 @@ class DexTelNode(Node):
         
         self.movement_scale = 1.5 
         
-        # Vision Threading Setup
-        # Run vision in background to maintain 60Hz control loop
-        import threading
         self.lock = threading.Lock()
         self.latest_state = None
         self.latest_img = None
@@ -132,18 +127,15 @@ class DexTelNode(Node):
             with self.lock:
                 self.latest_img = img
                 self.latest_state = state
-            # Sleep slightly to prevent CPU hogging if tracker is too fast (unlikely)
             time.sleep(0.001)
 
     def control_loop(self):
-        # 1. Get latest data from thread
         state = None
         img = None
         with self.lock:
             state = self.latest_state
             img = self.latest_img
         
-        # 2. Logic (Calibration, Retargeting)
         if self.robot_home_pos is None and self.retargeting_enabled:
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
@@ -166,14 +158,10 @@ class DexTelNode(Node):
         gripper_val = self.get_gripper_val(state)
         
         if target_joints is not None:
-             # [Speed Config]
-            # Homing: Faster (e.g. 1.0 rad/s) for efficiency
-            # Tracking: Slower (e.g. 0.5 rad/s) for safety/smoothness
             max_vel = 1
             if self.state == STATE_HOMING:
-                max_vel = 0.25 # Consistent with user setting
+                max_vel = 0.5
                 now = time.time()
-                # Remove throttle, update at 60Hz (full speed control loop)
                 if isinstance(self.robot, SimRobotInterface):
                    self.robot.publish_full_state(target_joints, gripper_val)
                 else:
@@ -181,7 +169,6 @@ class DexTelNode(Node):
                    self.robot.move_gripper(gripper_val)
                 self.last_homing_cmd_time = now
             else:
-                # Active Tracking
                 if isinstance(self.robot, SimRobotInterface):
                     self.robot.publish_full_state(target_joints, gripper_val)
                 else:
@@ -189,7 +176,6 @@ class DexTelNode(Node):
                     self.robot.move_gripper(gripper_val)
 
         if img is not None:
-            # COPY image to prevent flickering (since we draw on it and reuse it)
             display_img = img.copy()
             if state:
                 try:
@@ -211,10 +197,8 @@ class DexTelNode(Node):
 
     def get_gripper_val(self, state):
         if self.use_real:
-            # Real Robot: 1.0 (Closed/Pinched)
             return 1.0 if (state and state.is_pinched) else 0.0
         else:
-            # Sim: 0.0 (Closed/Pinched)
             return -0.025 if (state and state.is_pinched) else 0.0
 
     def process_state_logic(self, state):
@@ -308,13 +292,11 @@ class DexTelNode(Node):
             if q_raw.shape[0] > 6: q_raw = q_raw[:6]
             if np.isnan(q_raw).any(): q_raw = np.zeros(6)
             
-            # Base Flip Safety Check
             if abs(q_raw[0] - self.home_joints[0]) > 2.0:
                 self.get_logger().warn("[SAFETY] Base Flip! Holding.")
                 q_raw = self.q_filtered if self.q_filtered is not None else self.home_joints
                 self.retargeting.reset_state(q_raw)
             
-            # [OneEuroFilter Application]
             now = time.time()
             if self.joint_filters is None:
                  self.q_filtered = q_raw
