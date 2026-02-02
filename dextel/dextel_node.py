@@ -135,6 +135,7 @@ class DexTelNode(Node):
              # [Speed Config]
             # Homing: Faster (e.g. 1.0 rad/s) for efficiency
             # Tracking: Slower (e.g. 0.5 rad/s) for safety/smoothness
+            max_vel = 0.5
             if self.state == STATE_HOMING:
                 max_vel = 0.25
                 now = time.time()
