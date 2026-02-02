@@ -1,4 +1,6 @@
 from setuptools import setup
+import os
+from glob import glob
 
 package_name = 'dextel'
 
@@ -10,6 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'assets'), glob('dextel/assets/*')),
+        (os.path.join('share', package_name, 'assets/meshes'), glob('dextel/assets/meshes/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +26,7 @@ setup(
         'console_scripts': [
             'ur3_realsense_hamer = dextel.ur3_realsense_hamer:main',
             'dextel_node = dextel.dextel_node:main',
+            'simple_robotiq_driver = dextel.simple_robotiq_driver:main',
         ],
     },
 )

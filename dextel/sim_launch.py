@@ -71,7 +71,6 @@ def create_ros2_bridge_graph():
             }
         )
         
-        
         # Manually set the targetPrim relationship
         try:
              import omni.usd
@@ -98,8 +97,6 @@ def create_ros2_bridge_graph():
              else:
                      print(f"[DexTel] [ERROR] ArticulationController prim not found at {prim_path}!", flush=True)
 
-
-                 
         except Exception as rel_err:
              print(f"[DexTel] Error setting targetPrim relationship: {rel_err}", flush=True)
              import traceback
@@ -107,8 +104,6 @@ def create_ros2_bridge_graph():
 
     except Exception as e:
         print(f"[DexTel] Error creating ROS 2 Bridge: {e}", flush=True)
-
-        # raise e # Suppress crash to allow debug
 
 def load_scene():
     """Loads the USD stage for the simulation."""
@@ -157,13 +152,6 @@ def main():
         print(f"[DexTel] UR3e Articulation Initialized. Joints: {robot.dof_names}")
         
         # Configure Gripper Drives (Stiffness/Damping)
-        # Assuming last two joints are Slider_1 and Slider_2
-        # We need to set them to be position controlled (high stiffness)
-        # This requires using the Articulation API from the robot object
-        
-        # --- Robust USD DriveAPI Configuration ---
-        # Instead of runtime gains (which can be flaky), we set the Drive properties directly on the USD Prims.
-        
         stage = omni.usd.get_context().get_stage()
         robot_prim_path = "/World/ur3e"
         robot_prim = stage.GetPrimAtPath(robot_prim_path)
@@ -185,19 +173,13 @@ def main():
                     if is_gripper:
                         print(f"[DexTel] Found Gripper Joint Prim: {name}")
                         
-                        # Determine Drive Type: Prismatic -> linear, Revolute -> angular
-                        # Default to angular if unsure, but checking type is better
                         drive_type = "angular"
                         if prim.IsA(UsdPhysics.PrismaticJoint):
                             drive_type = "linear"
                             
-                        # Apply Drive API
-                        # The API schema is applied to the prim with a specific instance name (drive_type)
                         drive_api = UsdPhysics.DriveAPI.Apply(prim, drive_type)
                         
                         # Set Properties for Position Control (Stiff)
-                        # We use a very high stiffness to ensure it holds position
-                        # Reduced to 1.0e4 to prevent physics jitter (1.0e5 was too high)
                         drive_api.CreateStiffnessAttr(1.0e4)
                         drive_api.CreateDampingAttr(1.0e3)
                         
@@ -210,7 +192,6 @@ def main():
                 print(f"[DexTel] Successfully configured {count} gripper joints via USD DriveAPI.")
         else:
             print(f"[DexTel] [WARN] Robot prim not found at {robot_prim_path}")
-
             
     except Exception as e:
         print(f"[DexTel] Could not configure robot/gripper: {e}")

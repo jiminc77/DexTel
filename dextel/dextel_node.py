@@ -1,17 +1,16 @@
 import rclpy
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
-
 import numpy as np
 import cv2
 import time
 import os
+from ament_index_python.packages import get_package_share_directory
 
 from dextel.ur3_realsense_hamer import RobustTracker, draw_ui_overlay
 from dextel.retargeting import RetargetingWrapper
 from dextel.robot_interface import SimRobotInterface, RealRobotInterface
 
-# Calibration States
+# Constants
 STATE_HOMING = -1
 STATE_WAITING = 0
 STATE_CALIBRATING = 1
@@ -21,36 +20,24 @@ class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
         
-        # Parameters
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
         self.declare_parameter('use_real', False)
         
         self.use_real = self.get_parameter('use_real').get_parameter_value().bool_value
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
         
-        # Paths
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
-        if not os.path.isabs(param_path):
-            urdf_path = os.path.join(pkg_dir, param_path)
-        else:
-            urdf_path = param_path
+        urdf_path = os.path.join(pkg_dir, param_path) if not os.path.isabs(param_path) else param_path
             
-        # Visuals
         cv2.namedWindow("DexTel Control", cv2.WINDOW_NORMAL)
         
-        # Robot Interface
         if self.use_real:
-            print("\n*** [DEXTEL] LAUNCHING IN REAL ROBOT MODE ***")
             self.get_logger().info("MODE: REAL ROBOT")
             self.robot = RealRobotInterface(self)
         else:
-            print("\n*** [DEXTEL] LAUNCHING IN SIMULATION MODE ***")
             self.get_logger().info("MODE: SIMULATION")
             self.robot = SimRobotInterface(self)
         
-        self.get_logger().info(f"Argument 'use_real': {self.use_real}")
-
-        # Retargeting
         # [base, shoulder_lift, elbow, wrist1, wrist2, wrist3]
         self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
         self.robot_home_pos = None
@@ -64,22 +51,15 @@ class DexTelNode(Node):
             self.get_logger().error(f"Retargeting Init Failed: {e}")
             self.retargeting_enabled = False
 
-        # Vision
         self.get_logger().info("Initializing Vision Tracker...")
         self.tracker = RobustTracker()
-            
         self.q_filtered = None
-        # [TUNING] Smoothing Factor (0.0 to 1.0)
-        # 0.02 = Very Smooth / Slow (High Lag)
-        # 0.10 = Fast / Responsive (More Jitter)
-        self.alpha = 0.04 
+        self.alpha = 0.15 
 
-        # Control Loop
         self.timer = self.create_timer(1.0/30.0, self.control_loop)
         self.get_logger().info("DexTel Node Ready.")
 
-        # State
-        self.state = STATE_HOMING # Start with Homing
+        self.state = STATE_HOMING
         self.last_homing_cmd_time = 0.0
         
         self.origin_hand_pos = None
@@ -92,36 +72,26 @@ class DexTelNode(Node):
         self.movement_scale = 1.5 
 
     def control_loop(self):
-        # 1. Init Robot Home (FK)
         if self.robot_home_pos is None and self.retargeting_enabled:
             pos, rot = self.retargeting.compute_fk(self.home_joints)
             self.robot_home_pos = pos
             self.robot_home_rot = rot
 
-        # 2. Vision Update
         img, state = self.tracker.process_frame()
-        # if img is None: return # Don't return, keep logic running even if cam fails (for robot safety)
         
-        # 3. Input Handling
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
             rclpy.shutdown(); return
         elif key & 0xFF == ord('r'):
             self.handle_reset(state)
 
-        # 4. State Logic (Waiting, Calibrating, Active)
         target_joints, ui_status, ui_color = self.process_state_logic(state)
-
-
-        # 5. Publish to Robot
         gripper_val = self.get_gripper_val(state)
         
-        # Only move joints if they are updated
         if target_joints is not None:
-            # Special Homing Handling: Don't spam
             if self.state == STATE_HOMING:
                 now = time.time()
-                if now - self.last_homing_cmd_time > 4.0: # Send every 4s
+                if now - self.last_homing_cmd_time > 4.0:
                     self.get_logger().info("Homing: Sending Home Trajectory...")
                     if isinstance(self.robot, SimRobotInterface):
                         self.robot.publish_full_state(target_joints, gripper_val)
@@ -130,20 +100,17 @@ class DexTelNode(Node):
                         self.robot.move_gripper(gripper_val)
                     self.last_homing_cmd_time = now
             else:
-                # Normal Operation
                 if isinstance(self.robot, SimRobotInterface):
                     self.robot.publish_full_state(target_joints, gripper_val)
                 else:
                     self.robot.move_joints(target_joints)
-                    # Don't spam gripper unless changed (handled in interface)
                     self.robot.move_gripper(gripper_val)
 
-        # 6. UI Update
         if img is not None:
             if state:
                 try:
-                     draw_ui_overlay(img, state, ui_status, ui_color)
-                except: pass
+                    draw_ui_overlay(img, state, ui_status, ui_color)
+                except Exception: pass
             cv2.imshow("DexTel Control", img)
 
     def handle_reset(self, state):
@@ -152,7 +119,6 @@ class DexTelNode(Node):
             self.calib_start_time = time.time()
             self.calib_samples_pos = []
             self.calib_samples_rot = []
-            # Don't clear q_filtered; hold position
             self.get_logger().info("Starting Calibration (2s)...")
         else:
             self.state = STATE_WAITING
@@ -161,138 +127,123 @@ class DexTelNode(Node):
 
     def get_gripper_val(self, state):
         if self.use_real:
-            # Real Robot: 0.0 (Open via Robotiq logic?) or 1.0 (Closed)
-            # SimpleRobotiqDriver: 0->0, 1->255
-            # Hand-E: 0 is Open (Wide), 255 is Closed.
-            if state and state.is_pinched:
-                 return 1.0 # Closed (255)
-            return 0.0 # Open (0)
+            # Real Robot: 1.0 (Closed/Pinched)
+            return 1.0 if (state and state.is_pinched) else 0.0
         else:
-            # Sim
-            if state and state.is_pinched:
-                 return 0.0 
-            return 0.025 
+            # Sim: 0.0 (Closed/Pinched)
+            return -0.025 if (state and state.is_pinched) else 0.0
 
     def process_state_logic(self, state):
-        target_q = None
-        status = "WAITING"
-        color = (100, 100, 100)
-
         if not self.retargeting_enabled:
             return None, "NO IK", (0, 0, 255)
 
         if self.state == STATE_HOMING:
-            target_q = self.home_joints
-            status = "ROBOT HOMING..."
-            color = (255, 0, 255)
-            
-            # Check convergence
-            if isinstance(self.robot, RealRobotInterface):
-                curr = self.robot.get_current_joints()
-                if curr is not None:
-                    # Calculate max deviation with Angular Unwrapping (Modulo 2pi)
-                    # diff = (a - b + pi) % 2pi - pi
-                    
-                    np_curr = np.array(curr)
-                    np_home = np.array(self.home_joints)
-                    
-                    diffs = np_curr - np_home
-                    # Wrap to [-pi, pi]
-                    diffs_wrapped = (diffs + np.pi) % (2 * np.pi) - np.pi
-                    
-                    max_diff = np.max(np.abs(diffs_wrapped))
-                    status = f"HOMING... Error: {max_diff:.2f}"
-                    
-                    if max_diff < 0.1:
-                        self.state = STATE_WAITING
-                        self.get_logger().info("Robot Homing Complete. Ready.")
-                else:
-                    status = "HOMING... (No Feedback)"
-            else:
-                # Sim: instant
-                self.state = STATE_WAITING
+            return self._handle_homing_logic()
         
         elif self.state == STATE_WAITING:
-            # Don't hold position actively, just wait.
-            # (Robot controller holds last pos, which is Home from Homing state)
-            target_q = None 
             self.q_filtered = self.home_joints
-            status = "WAITING (Press R)"
-            color = (0, 165, 255)
+            return None, "WAITING (Press R)", (0, 165, 255)
 
         elif self.state == STATE_CALIBRATING:
-            # Freeze at current position (q_filtered) or Home if startup
-            target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
-            
-            elapsed = time.time() - self.calib_start_time
-            remaining = max(0.0, 2.0 - elapsed)
-            status = f"CALIB... {remaining:.1f}s"
-            color = (0, 255, 255)
-            
-            if state:
-                self.calib_samples_pos.append(state.position)
-                self.calib_samples_rot.append(state.orientation)
-            
-            if elapsed >= 2.0:
-                if len(self.calib_samples_pos) > 0:
-                    self.origin_hand_pos = np.mean(self.calib_samples_pos, axis=0)
-                    self.origin_hand_rot = self.calib_samples_rot[-1] 
-                    
-                    # [FEATURE] Re-Center Robot Reference
-                    # Map (Current Hand Pos) -> (Current Held Robot Pos)
-                    pos, rot = self.retargeting.compute_fk(target_q)
-                    self.robot_home_pos = pos
-                    self.robot_home_rot = rot
-                    
-                    self.retargeting.reset_state(target_q)
-                    self.state = STATE_ACTIVE
-                    self.last_hand_seen_time = time.time()
-                    self.get_logger().info("Calibration Done. Ref Centered.")
-                else:
-                    self.state = STATE_WAITING
-                    self.get_logger().warn("Calibration Failed.")
+            return self._handle_calibrating_logic(state)
 
         elif self.state == STATE_ACTIVE:
-            status = "ACTIVE"
-            color = (0, 255, 0)
+            return self._handle_active_logic(state)
             
-            if state:
-                self.last_hand_seen_time = time.time()
-                diff_pos = state.position - self.origin_hand_pos     
-                target_pos = self.robot_home_pos + (diff_pos * self.movement_scale)
+        return None, "UNKNOWN", (0,0,0)
+
+    def _handle_homing_logic(self):
+        target_q = self.home_joints
+        status = "ROBOT HOMING..."
+        color = (255, 0, 255)
+        
+        if isinstance(self.robot, RealRobotInterface):
+            curr = self.robot.get_current_joints()
+            if curr is not None:
+                np_curr = np.array(curr)
+                np_home = np.array(self.home_joints)
+                diffs = np_curr - np_home
+                diffs_wrapped = (diffs + np.pi) % (2 * np.pi) - np.pi
+                max_diff = np.max(np.abs(diffs_wrapped))
+                status = f"HOMING... Error: {max_diff:.2f}"
                 
-                # Delta Rotation
-                R_delta = state.orientation @ self.origin_hand_rot.T
-                target_rot = R_delta @ self.robot_home_rot
-                
-                q_raw = self.retargeting.solve(target_pos, target_rot)
-                
-                if q_raw.shape[0] > 6: q_raw = q_raw[:6]
-                if np.isnan(q_raw).any(): q_raw = np.zeros(6)
-                
-                # Safety Check (Base Flip)
-                if abs(q_raw[0] - self.home_joints[0]) > 2.0:
-                    self.get_logger().warn("[SAFETY] Base Flip! Holding.")
-                    q_raw = self.q_filtered if self.q_filtered is not None else self.home_joints
-                    self.retargeting.reset_state(q_raw)
-                
-                if self.q_filtered is None: self.q_filtered = q_raw
-                else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
-                
-                target_q = self.q_filtered
+                if max_diff < 0.1:
+                    self.state = STATE_WAITING
+                    self.get_logger().info("Robot Homing Complete. Ready.")
             else:
-                # Hand Lost Logic
-                if time.time() - self.last_hand_seen_time > 3.0:
-                    status = "LOST -> RE-HOMING"
-                    self.state = STATE_HOMING # Go back to Homing -> Gripper Test -> Waiting
-                    self.last_homing_cmd_time = 0.0 # Force immediate home command
-                else:
-                    target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
-                    status = "Hand Lost (Wait 3s...)"
-
-
+                status = "HOMING... (No Feedback)"
+        else:
+            self.state = STATE_WAITING
+        
         return target_q, status, color
 
+    def _handle_calibrating_logic(self, state):
+        target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
+        self.q_filtered = target_q
+        elapsed = time.time() - self.calib_start_time
+        remaining = max(0.0, 2.0 - elapsed)
+        status = f"CALIB... {remaining:.1f}s"
+        color = (0, 255, 255)
+        
+        if state:
+            self.calib_samples_pos.append(state.position)
+            self.calib_samples_rot.append(state.orientation)
+        
+        if elapsed >= 2.0:
+            if len(self.calib_samples_pos) > 0:
+                pos, rot = self.retargeting.compute_fk(target_q)
+                self.origin_hand_pos = np.mean(self.calib_samples_pos, axis=0)
+                self.origin_hand_rot = self.calib_samples_rot[-1]
+                self.robot_home_pos = pos
+                self.robot_home_rot = rot
+                self.retargeting.reset_state(target_q)
+                self.state = STATE_ACTIVE
+                self.last_hand_seen_time = time.time()
+                self.get_logger().info("Calibration Done.")
+            else:
+                self.state = STATE_WAITING
+                self.get_logger().warn("Calibration Failed.")
+        
+        return target_q, status, color
+
+    def _handle_active_logic(self, state):
+        status = "ACTIVE"
+        color = (0, 255, 0)
+        target_q = None
+        
+        if state:
+            self.last_hand_seen_time = time.time()
+            diff_pos = state.position - self.origin_hand_pos     
+            target_pos = self.robot_home_pos + (diff_pos * self.movement_scale)
+            
+            R_delta = state.orientation @ self.origin_hand_rot.T
+            target_rot = R_delta @ self.robot_home_rot
+            
+            q_raw = self.retargeting.solve(target_pos, target_rot)
+            
+            if q_raw.shape[0] > 6: q_raw = q_raw[:6]
+            if np.isnan(q_raw).any(): q_raw = np.zeros(6)
+            
+            # Base Flip Safety Check
+            if abs(q_raw[0] - self.home_joints[0]) > 2.0:
+                self.get_logger().warn("[SAFETY] Base Flip! Holding.")
+                q_raw = self.q_filtered if self.q_filtered is not None else self.home_joints
+                self.retargeting.reset_state(q_raw)
+            
+            if self.q_filtered is None: self.q_filtered = q_raw
+            else: self.q_filtered = self.alpha * q_raw + (1.0 - self.alpha) * self.q_filtered
+            
+            target_q = self.q_filtered
+        else:
+            if time.time() - self.last_hand_seen_time > 3.0:
+                status = "LOST -> RE-HOMING"
+                self.state = STATE_HOMING
+                self.last_homing_cmd_time = 0.0
+            else:
+                target_q = self.q_filtered if self.q_filtered is not None else self.home_joints
+                status = "Hand Lost (Wait 3s...)"
+        
+        return target_q, status, color
 
 def main(args=None):
     rclpy.init(args=args)

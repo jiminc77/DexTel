@@ -6,7 +6,6 @@ import time
 import math
 import torch
 import warnings
-from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 import os
 import hamer
@@ -268,20 +267,16 @@ class RobustTracker:
             
             R = self.estimate_rigid_orientation(joints_centered)
             if self.filter_rot is None:
-                self.filter_rot = OneEuroFilter(R, t_now, min_cutoff=0.5, beta=0.05)
+                self.filter_rot = OneEuroFilter(R, t_now, min_cutoff=0.5, beta=0.01)
             R_smooth = self.filter_rot(t_now, R)
             
             wrist_pt_3d =  rs.rs2_deproject_pixel_to_point(self.intrinsics, [wrist_px_x, wrist_px_y], z_wrist_m)
             pos_3d = np.array(wrist_pt_3d)
             
             if self.filter_pos is None:
-                self.filter_pos = OneEuroFilter(pos_3d, t_now, min_cutoff=1.0, beta=0.1)
+                self.filter_pos = OneEuroFilter(pos_3d, t_now, min_cutoff=1.0, beta=0.02)
             pos_smooth = self.filter_pos(t_now, pos_3d)
 
-            # --- Coordinate Transformation ---
-            
-            # --- Coordinate Transformation ---
-            
             # 1. Position Mapping (Camera -> Robot)
             # Mapped based on "Camera on Right, Facing User" setup:
             # - User Hand Forward (Robot -x) = Camera Image Right (+x_cam) => X_rob = -X_cam
@@ -295,7 +290,6 @@ class RobustTracker:
             pos_rob = R_pos_map @ pos_smooth
             
             # 2. Orientation Mapping
-            # Use the same global mapping so hand orientation follows the user's perspective.
             R_rot_map = np.array([
                 [-1,  0,  0],
                 [ 0,  0, -1],
@@ -303,26 +297,13 @@ class RobustTracker:
             ])
             
             # 3. Local Hand Adjustment
-            # Maps Hand Frame (MANO) to Gripper Frame
-            # Hand Y (Fingers) -> Gripper Z (Approach)
-            # Hand Z (Palm)    -> Gripper Y (Up)
-            # Hand X (Side)    -> Gripper X (Side)
             R_hand_local = np.array([
                 [1, 0, 0],
                 [0, 0, 1],
                 [0, 1, 0]
             ])
             
-            # Apply Rotations: Global_Map * Smooth_Rot * Local_Map
             R_rob = R_rot_map @ R_smooth @ R_hand_local
-            
-            # 3. Workspace Offset
-            # Centering the workspace for UR3e reachability
-            # NOTE: User provided default pose:
-            # shoulder_pan: 0, lift: -90, elbow: -90, w1: -90, w2: 90, w3: 0
-            # This offset might need tuning to match that "Home" position.
-            # Currently keeping safe offsets.
-            # X: 0.3m (Forward), Y: -0.1m (Right), Z: 0.2m (Up)
             pos_rob += np.array([0.3, -0.1, 0.2])
             
             thumb_tip = joints_centered[4]
@@ -362,7 +343,7 @@ class RobustTracker:
                 
                 fps = 1.0 / (time.time() - t_start)
                 if state:
-                    draw_ui_overlay(img, state, fps)
+                    draw_ui_overlay(img, state, f"FPS: {fps:.1f} | Hand Tracking", (0, 255, 0))
                 
                 cv2.imshow("DexTel Control", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -380,53 +361,34 @@ def draw_wrist_frame(image, u, v, R, axis_len=60):
         cv2.line(image, origin, end_pt, colors[i], 3, cv2.LINE_AA)
     cv2.circle(image, origin, 5, (255, 255, 255), -1)
 
-
 def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tuple):
     h, w = image.shape[:2]
     overlay = image.copy()
-    
-    # Base Resolution: 480p
-    # Scale All UI elements relative to height
     s = h / 480.0
     
-    # Helper for scaled int
     def si(v): return int(v * s)
-    # Helper for font scale
     def sf(v): return v * s 
     
-    # --- Backgrounds (Overlay) ---
-    
-    # 1. Top Status Bar
     bar_h = si(50)
     cv2.rectangle(overlay, (0, 0), (w, bar_h), (10, 10, 10), -1)
     
     if state:
-        # 2. Info Panel
         panel_w, panel_h = si(200), si(120)
         margin = si(20)
         cv2.rectangle(overlay, (margin, h - panel_h - margin), (margin + panel_w, h - margin), (20, 20, 20), -1)
-        
-        # 4. Orientation Info (RPY)
         cv2.rectangle(overlay, (w - panel_w - margin, h - panel_h - margin), (w - margin, h - margin), (20, 20, 20), -1)
 
-    # Apply Transparency (Single Blend)
     cv2.addWeighted(overlay, 0.3, image, 0.7, 0, image)
     
-    # --- Content (Text & Graphics) ---
-    
     font = cv2.FONT_HERSHEY_DUPLEX
-    # DexTel Title
     cv2.putText(image, "DexTel", (si(20), si(35)), font, sf(0.8), (255, 255, 255), si(1), cv2.LINE_AA)
-    # Status Text
     cv2.putText(image, status_text, (si(140), si(35)), font, sf(0.6), status_color, si(1), cv2.LINE_AA)
     
     if state:
-        # Grip Status Indicator
         status = "GRIPPED" if state.is_pinched else "RELEASED"
         col = (0, 200, 100) if state.is_pinched else (200, 200, 200)
         
-        grip_box_w = si(130)
-        grip_box_h = si(30)
+        grip_box_w, grip_box_h = si(130), si(30)
         grip_margin = si(20)
         
         box_tl = (w - grip_box_w - grip_margin, si(10))
@@ -435,14 +397,11 @@ def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tup
         cv2.rectangle(image, box_tl, box_br, col, -1)
         
         ts = cv2.getTextSize(status, font, sf(0.6), si(1))[0]
-        # Center text in box
         text_x = box_tl[0] + (grip_box_w - ts[0]) // 2
         text_y = box_tl[1] + (grip_box_h + ts[1]) // 2
         cv2.putText(image, status, (text_x, text_y), font, sf(0.6), (0,0,0), si(1))
     
-        # Info Panel Text
-        # Base Y for info panel
-        info_y_base = h - panel_h - margin + si(30)
+        info_y_base = h - si(120) - margin + si(30)
         line_step = si(25)
         
         cv2.putText(image, "POSITION", (margin + si(10), info_y_base), font, sf(0.5), (150, 150, 150), si(1))
@@ -450,27 +409,21 @@ def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tup
         cv2.putText(image, f"Y {state.position[1]:.3f}", (margin + si(10), info_y_base + line_step*2), font, sf(0.6), (255,255,255), si(1))
         cv2.putText(image, f"Z {state.position[2]:.3f}", (margin + si(10), info_y_base + line_step*3), font, sf(0.6), (255,255,255), si(1))
         
-        # Pinch Bar
-        # Center bottom
         bar_w = si(300)
         cx, cy = w // 2, h - si(30)
         
-        cv2.line(image, (cx - bar_w//2, cy), (cx + bar_w//2, cy), (100,100,100), si(4)) # Rail
+        cv2.line(image, (cx - bar_w//2, cy), (cx + bar_w//2, cy), (100,100,100), si(4)) 
         
         rmax = 0.15
         for thresh, c in [(PINCH_CLOSE_THRESH, (0,0,255)), (PINCH_OPEN_THRESH, (0,255,0))]:
             off = int((thresh/rmax) * bar_w)
-            # Center is -bar_w/2, so offset acts from left
-            # Actual x = (cx - bar_w/2) + off
             x_line = cx - bar_w//2 + off
             cv2.line(image, (x_line, cy - si(8)), (x_line, cy + si(8)), c, si(2))
             
         val_off = int((min(state.pinch_dist, rmax)/rmax) * bar_w)
         cv2.circle(image, (cx - bar_w//2 + val_off, cy), si(8), (0,255,255), -1)
 
-        # Orientation Text
-        orient_x_base = w - panel_w - margin + si(10)
-        
+        orient_x_base = w - si(200) - margin + si(10)
         r_deg = np.degrees(state.rpy)
         cv2.putText(image, "RAW ORIENTATION", (orient_x_base, info_y_base), font, sf(0.5), (150, 150, 150), si(1))
         cv2.putText(image, f"R {r_deg[0]:.0f}", (orient_x_base, info_y_base + line_step), font, sf(0.6), (255,255,255), si(1))
