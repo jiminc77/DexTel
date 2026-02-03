@@ -1,34 +1,30 @@
 # DexTel Codebase: Logic Deep Dive & Operation Manual
-
-This document provides a technical deep-dive into the DexTel architecture, explaining *why* it works (Principles) and *how* to use it (Operation).
-
 ---
 
-## Part 1: Technical Principles
+## Technical Principles
 
 ### 1. System Orchestration: `dextel_node.py`
 
-This module is the "Brain" of the operation. It bridges the asynchronous world of Computer Vision with the synchronous world of Robot Control.
+This module is the "Brain" of the operation. 
+It bridges the asynchronous Computer Vision with the synchronous Robot Control.
 
-#### 1.1. Concurrency Model (Why Threads?)
+#### 1.1. Concurrency Model
 The system uses a **Producer-Consumer** pattern via `threading`:
 -   **Vision Thread (`RobustTracker`)**:
     -   *Role*: Producer.
     -   *Rate*: Variable (~30-45 FPS), dependent on GPU inference time.
     -   *Logic*: Captures RealSense frames $\to$ Inference $\to$ `HandState` object.
-    -   *Critical Design*: It runs freely. If we coupled this to the robot's control loop, a slow frame would stutter the robot.
 -   **Control Loop (Timer @ 60Hz)**:
     -   *Role*: Consumer.
-    -   *Rate*: Fixed 60Hz (Real-Time requirement).
+    -   *Rate*: Fixed 60Hz
     -   *Logic*: Fetches the *latest available* `HandState` from the lock-protected shared memory.
     -   *Interpolation*: If a new frame isn't available yet, the **OneEuroFilter** smooths the transition, effectively upsampling the ~30Hz vision signal to the 60Hz robot command signal without step artifacts.
 
 #### 1.2. The Finite State Machine
-Teleoperation systems need clearly defined safety states:
-1.  **HOMING**: Robot moves to a safe "Candlestick" pose. Guarantees a safe start workspace.
+1.  **HOMING**: Robot moves to a safe start pose.
 2.  **WAITING**: Idle state. Checks for hand presence.
 3.  **CALIBRATING**:
-    -   *Mathematical Purpose*: To define the coordinate transformation $T_{offset}$.
+    -   *Purpose*: To define the coordinate transformation $T_{offset}$.
     -   Records user hand pose $P_{hand\_zero}$ and robot home pose $P_{robot\_zero}$.
     -   During operation: $P_{target} = P_{robot\_zero} + Scale \times (P_{current\_hand} - P_{hand\_zero})$.
     -   Allows operating from *any* comfortable position.
@@ -36,16 +32,13 @@ Teleoperation systems need clearly defined safety states:
 
 ### 2. Vision Logic: `ur3_realsense_hamer.py`
 
-The systems "Eyes". Focuses on **Hybrid Tracking**.
-
 #### 2.1. Why MediaPipe + HaMeR?
--   **MediaPipe Hands**: Fast 2D ROI detection.
--   **HaMeR (Transformer)**: Accurate 3D Mesh recovery.
+-   **MediaPipe**: Fast 2D ROI detection (hand tracking).
+-   **HaMeR**: Accurate 3D Mesh recovery.
 -   **Pipeline**: MediaPipe finds ROI $\to$ HaMeR infers Mesh. Optimized for speed.
 
-#### 2.2. Metric Depth Fusion (The "RealSense Trick")
-HaMeR outputs *normalized relative space*. To control a robot, we need Meters.
-**Solution**:
+#### 2.2. Metric Depth Fusion
+HaMeR outputs normalized relative space. To control a robot, we need Meters.
 1.  Project HaMeR "Wrist" keypoint to 2D pixel $(u, v)$.
 2.  Sample **RealSense Depth Map** $D(u, v)$ at that pixel.
 3.  **Deprojection (Pinhole Model)**:
@@ -79,7 +72,7 @@ $$ \text{Cost} = w_1 \|\vec{v}_{robot\_z} - \vec{v}_{hand\_approach}\|^2 + w_2 \
 
 ---
 
-## Part 2: Operation Manual
+## Operation Manual
 
 ### 1. Simulation Setup (Isaac Sim)
 
@@ -90,7 +83,6 @@ This script loads the `ur3e_hande` asset and sets up the ROS 2 Bridge automatica
 ```bash
 python3 -m dextel.sim_launch
 ```
-*Wait for Isaac Sim to load and the robot to appear.*
 
 **Step 2: Start Control Node**
 In a new terminal:
@@ -132,12 +124,3 @@ python3 -m dextel.dextel_node --ros-args -p use_real:=True
 2.  **Calibrate**: Press **'R'** to zero the hand position.
 3.  **Active**: Start teleoperation.
 4.  **Safety**: If you withdraw your hand, the robot freezes/homes after 3 seconds.
-
-### 3. Troubleshooting
-
-| Symptom | Probable Cause | Fix |
-| :--- | :--- | :--- |
-| **Robot Jitter** | Noisy Keypoints | Increase `min_cutoff` in `dextel_node.py` (e.g., to 1.0). |
-| **High Latency** | Over-smoothing | Decrease `beta` or `min_cutoff`. |
-| **Twisting Arm** | Solution Flip | The Optimizer found a new local minima. Slow down movement. |
-| **Gripper Not Moving** | Socket Error | Check IP/Port. Ensure Gripper is activated (Blue Light). |

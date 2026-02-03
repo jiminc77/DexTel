@@ -12,13 +12,6 @@ Instead of matching absolute position (which causes singularities), we align **V
 2.  **Normal Vector**: Aligns Robot Tool Y-Axis with User's Palm Normal.
 3.  **Position**: Aligns Robot Tool Origin with User's Wrist (Relative).
 
-**Code Highlight**:
-```python
-# dextel/retargeting.py
-target_vecs = np.vstack([target_pos, target_vec_z, target_vec_y])
-result_q = self.optimizer.retarget(target_vecs, ...)
-```
-
 ---
 
 ## 2. Isaac Sim Setup (`sim_launch.py`)

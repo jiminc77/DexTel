@@ -2,9 +2,8 @@
 
 ## Project Overview
 
-**Goal**: Implement a robust real-time teleoperation system for a **UR3e collaborative robot** using a **RealSense D455** camera and **AI-based hand tracking**.
+**Goal**: Implement a robust real-time teleoperation system for a **UR3e** using a **One RGB-D Camera** and **AI-based hand tracking**.
 
-**Development Phase**: Sprint
 **Core Tech**: ROS 2 Jazzy, MediaPipe + HaMeR (Vision), Dex-Retargeting (Optimization), Isaac Sim.
 
 ---
@@ -56,8 +55,7 @@ The project was executed in three distinct phases.
 - **Key Tasks**:
   1.  Implement `RealRobotInterface` publishing to `scaled_joint_trajectory_controller`.
   2.  Create `simple_robotiq_driver.py` for direct socket control of the gripper.
-  3.  Add Safety Logic: Use velocity scaling and base joint limits (-2.0 to +2.0 rad) to prevent flips.
-  4.  Final Integration Test: Validating Pick & Place tasks with physical objects.
+  3.  Validating Pick & Place tasks with physical objects.
 
 ---
 

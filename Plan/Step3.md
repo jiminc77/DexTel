@@ -21,7 +21,6 @@ We communicate with the UR ROS 2 Driver.
 The standard driver was too slow/complex, so we wrote a direct socket driver.
 -   **Protocol**: Connects to Port `63352` on the robot controller.
 -   **Commands**: Sends ASCII strings like `SET POS 255` (Close) or `SET POS 0` (Open).
--   **Latency**: <10ms command latency.
 
 ---
 
@@ -55,10 +54,3 @@ python3 -m dextel.dextel_node --ros-args -p use_real:=True
 3.  **Calibration**: User shows hand, presses 'R'.
 4.  **Active**: Robot follows hand.
 5.  **Safety**: If hand is lost for 3 seconds, Robot performs a "Soft Stop" or re-homes.
-
----
-
-## 5. Final Capabilities
--   **Latency**: ~50-80ms (End-to-End).
--   **Precision**: Sufficient for block stacking and passing objects.
--   **Robustness**: Hand tracking recovers instantly from occlusion; Robot does not drift.

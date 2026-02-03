@@ -5,7 +5,7 @@
 ---
 
 ## Part A: Environment Setup
-**Target System**: Ubuntu 24.04 (Noble) + NVIDIA RTX 4090/5090.
+**Target System**: Ubuntu 24.04 + NVIDIA RTX 5090.
 
 ### 1. System Prerequisites
 
@@ -25,7 +25,7 @@ sudo apt install -y build-essential gcc-11 g++-11 git curl python3-pip net-tools
 ```
 
 ### 2. Install ROS 2 Jazzy
-We use **ROS 2 Jazzy Jalisco** (Native Shared Memory) for low-latency communication.
+We use **ROS 2 Jazzy** for low-latency communication.
 
 ```bash
 # 1. Enable Universe Repo
@@ -110,7 +110,7 @@ cd ~/workspace/ros2_ws/src/dextel/dextel
 ln -s ../../hamer/_DATA _DATA
 ```
 
-### 5. Install Isaac Sim 4.5/5.0
+### 5. Install Isaac Sim 5.0
 ```bash
 pip install isaacsim==5.0.0 --extra-index-url https://pypi.nvidia.com
 ```
