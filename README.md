@@ -21,9 +21,13 @@ Key technologies include:
 
 Here are demonstrations of the system in action:
 
-*   **Tracking Verification**: [Tracking_demo.mov](Demo/Tracking_demo.mov) - Verifying initial hand tracking performance.
-*   **Simulation Verification**: [Simulation_demo.mov](Demo/Simulation_demo.mov) - Validation of control logic in Isaac Sim.
-*   **Final System**: [Final_demo.mov](Demo/Final_demo.mov) - The complete system controlling the real UR3e robot.
+*   **Simulation Verification**: Validation of control logic in Isaac Sim.
+
+    https://github.com/user-attachments/assets/7a871f9e-7ba4-4467-bb5f-63d9f167c136
+
+*   **Final System**: The complete system controlling the real UR3e robot.
+    
+    https://github.com/user-attachments/assets/8572fc36-e0e8-4f84-bea0-731d6948e8bb
 
 ## Documentation
 
