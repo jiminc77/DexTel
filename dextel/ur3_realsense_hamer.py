@@ -335,6 +335,7 @@ class RobustTracker:
 
     def run(self):
         print("[INFO] Starting Clean Tracker...")
+        cv2.namedWindow("DexTel Control", cv2.WINDOW_NORMAL)
         try:
             while True:
                 t_start = time.time()
