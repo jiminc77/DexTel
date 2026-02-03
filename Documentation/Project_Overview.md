@@ -17,8 +17,8 @@ graph LR
     User[User Hand] -->|RGB-D| D455[RealSense D455]
     
     subgraph "Vision & Control Node (60Hz)"
-        D455 -->|Frames| Vision[Vision Pipeline\n(HaMeR + OneEuroFilter)]
-        Vision -->|Target Vectors| Retarget[Retargeting\n(VectorOptimizer)]
+        D455 -->|Frames| Vision["Vision Pipeline\n(HaMeR + OneEuroFilter)"]
+        Vision -->|Target Vectors| Retarget["Retargeting\n(VectorOptimizer)"]
         Retarget -->|Joint Solution| RobotIF[Robot Interface]
     end
     
