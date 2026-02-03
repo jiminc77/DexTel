@@ -139,9 +139,3 @@ source /opt/ros/jazzy/setup.bash
 # 2. Run Vision Script
 python3 -m dextel.ur3_realsense_hamer
 ```
-
-**Checklist**:
-- [ ] UI Window opens.
-- [ ] Hand skeleton (Red/Green/Blue axes) aligns with your hand.
-- [ ] "Pinch" state changes when you tap thumb and index.
-- [ ] FPS is acceptable (>30Hz).
