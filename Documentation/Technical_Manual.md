@@ -107,19 +107,25 @@ python3 -m dextel.robot_connection_test
 # Expect: "Connection successful!"
 ```
 
-**Step 2: Launch Gripper Driver**
+**Step 2: Launch UR ROS2 Driver**
+This bridges the High-Level ROS 2 topics to the Low-Level Robot Controller.
+```bash
+ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3e robot_ip:=137.49.35.26 launch_rviz:=false
+```
+
+**Step 3: Launch Gripper Driver**
 Runs the low-latency socket driver.
 ```bash
 python3 -m dextel.simple_robotiq_driver
 ```
 
-**Step 3: Launch Main Control Node**
+**Step 4: Launch Main Control Node**
 The `use_real:=True` flag switches the interface to `RealRobotInterface`.
 ```bash
 python3 -m dextel.dextel_node --ros-args -p use_real:=True
 ```
 
-**Step 4: Operational Loop**
+**Step 5: Operational Loop**
 1.  **Homing**: The robot will slowly move to the "Candlestick" vertical pose.
 2.  **Calibrate**: Press **'R'** to zero the hand position.
 3.  **Active**: Start teleoperation.

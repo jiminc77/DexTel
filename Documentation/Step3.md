@@ -40,8 +40,19 @@ The standard driver was too slow/complex, so we wrote a direct socket driver.
 
 To run on the real robot, we pass the `use_real:=True` flag.
 
+### 4.1. Install UR ROS2 Driver (One-Time)
 ```bash
-# Terminal 1: Gripper Driver
+sudo apt-get update
+sudo apt-get install ros-jazzy-ur-robot-driver
+```
+
+### 4.2. Run Teleoperation (3 Terminals)
+
+```bash
+# Terminal 1: UR ROS2 Driver
+ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3e robot_ip:=137.49.35.26 launch_rviz:=false
+
+# Terminal 2: Gripper Driver
 python3 -m dextel.simple_robotiq_driver
 
 # Terminal 2: Main Teleop Node
