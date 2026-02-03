@@ -1,7 +1,7 @@
-# DexTel: Real-Time UR3e Teleoperation System
+# DexTel: Single-Camera Real-Time Teleoperation System
 
 ## Introduction
-DexTel is a real-time teleoperation system for the **UR3e** robot arm using a **Single Realsense D455 Camera** and **AI-based hand tracking**.
+DexTel is a real-time teleoperation system for the robot arm using a **Single RGB-D Camera** and **AI-based hand tracking**.
 
 The system utilizes **[MediaPipe](https://github.com/google/mediapipe)** and **[HaMeR](https://github.com/geopavlakos/hamer)** for high-fidelity hand tracking and **[Dex-Retargeting](https://github.com/dexsuite/dex-retargeting)** for optimization-based motion mapping, allowing users to control the robot arm intuitively using their own hand movements—**without the need for expensive motion capture gloves, VR controllers, or wearable markers.**
 
