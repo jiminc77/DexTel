@@ -58,8 +58,8 @@ source ~/.bashrc
 sudo apt install -y ros-jazzy-realsense2-camera ros-jazzy-realsense2-description
 ```
 
-### 3. AI & Vision Environment (Conda)
-We use a dedicated Conda environment to handle PyTorch and HaMeR dependencies without conflicting with ROS system packages.
+### 3. Simulation Environment (Conda: `isaac_sim`)
+This environment is exclusively for running **Isaac Sim** and its python bridge.
 
 ```bash
 # 1. Install Miniconda
@@ -69,31 +69,45 @@ bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
 ~/miniconda3/bin/conda init bash
 source ~/.bashrc
 
-# 2. Create 'isaac' Environment
-conda create -n isaac python=3.10 -y
-conda activate isaac
+# 2. Create 'isaac_sim' Environment
+conda create -n isaac_sim python=3.10 -y
+conda activate isaac_sim
 
-# 2. Key Libraries
+# 3. Install Isaac Sim 5.0
+pip install isaacsim==5.0.0 --extra-index-url https://pypi.nvidia.com
+pip install --upgrade "rocker" # Required for some sim bridges
+```
+
+### 4. Robot Control Environment (venv: `dextel`)
+This is the **Main Execution Environment**. It uses `venv` with `--system-site-packages` to inherit the system `ros-jazzy` libraries (rclpy, etc) while allowing custom pip packages for AI.
+
+```bash
+# 1. Create venv in project root
+cd ~/workspace/ros2_ws/src/dextel
+python3 -m venv --system-site-packages venv
+
+# 2. Activate
+source venv/bin/activate
+
+# 3. Install Vision & ML Dependencies
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install mediapipe pyrealsense2 opencv-python numpy scipy
 pip install pinocchio
 pip install dex-retargeting --no-deps 
-# Note: dex-retargeting is installed for util functions, but we use custom logic.
-
-# Verify usage
-python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ```
 
-### 4. Install HaMeR (Hand Mesh Recovery)
-HaMeR is used for 3D Keypoint estimation.
+### 5. Install HaMeR (Hand Mesh Recovery)
+HaMeR is required by the `dextel_node` (running in `venv`).
 
 ```bash
 # 1. Clone Dependencies
 cd ~/workspace/ros2_ws/src
 git clone https://github.com/geopavlakos/hamer.git
 
-# 2. Install HaMeR
-cd hamer
+# 2. Install HaMeR into venv
+cd ~/workspace/ros2_ws/src/dextel
+source venv/bin/activate  # Ensure venv is active
+cd ../hamer
 pip install -e .
 pip install webdataset hydra-core pyrootutils rich smplx==0.1.28 chumpy
 
@@ -108,11 +122,6 @@ wget -O _DATA/data/mano/MANO_RIGHT.pkl https://huggingface.co/camenduru/HandRefi
 # 4. Link Data to DexTel
 cd ~/workspace/ros2_ws/src/dextel/dextel
 ln -s ../../hamer/_DATA _DATA
-```
-
-### 5. Install Isaac Sim 5.0
-```bash
-pip install isaacsim==5.0.0 --extra-index-url https://pypi.nvidia.com
 ```
 
 ---

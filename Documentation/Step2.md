@@ -51,8 +51,16 @@ The `DexTelNode` orchestrates the flow. In simulation mode (`use_real:=False`), 
 
 ## 4. Verification
 
-1.  **Launch Sim**: `python3 -m dextel.sim_launch`
-2.  **Launch Node**: `python3 -m dextel.dextel_node`
+1.  **Launch Sim (Conda)**:
+    ```bash
+    conda activate isaac_sim
+    python3 -m dextel.sim_launch
+    ```
+2.  **Launch Node (venv)**:
+    ```bash
+    source ~/workspace/ros2_ws/src/dextel/venv/bin/activate
+    python3 -m dextel.dextel_node
+    ```
 3.  **Test**:
     -   Press 'R' to calibrate.
     -   Move hand up/down $\to$ Robot moves up/down.

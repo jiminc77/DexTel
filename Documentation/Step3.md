@@ -55,7 +55,8 @@ ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3e robot_ip:=137.49.
 # Terminal 2: Gripper Driver
 python3 -m dextel.simple_robotiq_driver
 
-# Terminal 2: Main Teleop Node
+# Terminal 3: Main Teleop Node (Must be in venv)
+source ~/workspace/ros2_ws/src/dextel/venv/bin/activate
 python3 -m dextel.dextel_node --ros-args -p use_real:=True
 ```
 
