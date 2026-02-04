@@ -86,6 +86,10 @@ class WristCamera:
                         # Resize to standard 640x480 if not already
                         if frame.shape[:2] != (480, 640):
                             frame = cv2.resize(frame, (640, 480))
+                        
+                        # Flip 180 degrees
+                        frame = cv2.rotate(frame, cv2.ROTATE_180)
+
                         with self.lock:
                             self.latest_frame = frame
                 time.sleep(0.01) # Max ~100fps polling, likely bottlenecked by network/cam
