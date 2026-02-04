@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import os
 import hamer
 from hamer.models import load_hamer, DEFAULT_CHECKPOINT
+import requests
+import threading
 
 warnings.filterwarnings("ignore")
 
@@ -62,15 +64,53 @@ class OneEuroFilter:
         self.t_prev = t
         return x_hat
 
+class WristCamera:
+    def __init__(self, ip):
+        self.ip = ip
+        self.url = f"http://{ip}:4242/current.jpg?type=color"
+        self.latest_frame = None
+        self.running = True
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self._update_loop, daemon=True)
+        self.thread.start()
+        print(f"[INFO] Wrist Camera HTTP Streamer Started ({self.url})")
+
+    def _update_loop(self):
+        while self.running:
+            try:
+                resp = requests.get(self.url, timeout=0.5)
+                if resp.status_code == 200:
+                    arr = np.asarray(bytearray(resp.content), dtype=np.uint8)
+                    frame = cv2.imdecode(arr, -1)
+                    if frame is not None:
+                        # Resize to standard 640x480 if not already
+                        if frame.shape[:2] != (480, 640):
+                            frame = cv2.resize(frame, (640, 480))
+                        with self.lock:
+                            self.latest_frame = frame
+                time.sleep(0.01) # Max ~100fps polling, likely bottlenecked by network/cam
+            except Exception:
+                time.sleep(0.1)
+
+    def get_frame(self):
+        with self.lock:
+            return self.latest_frame.copy() if self.latest_frame is not None else None
+
+    def release(self):
+        self.running = False
+        self.thread.join(timeout=1.0)
+
 class RobustTracker:
-    def __init__(self, wrist_cam_id=None):
+    def __init__(self, wrist_cam_ip=None):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"[INFO] Using Device: {self.device}")
         
+        
         self.init_realsense()
-        self.wrist_cam_id = wrist_cam_id
+        self.wrist_cam_ip = wrist_cam_ip
         self.wrist_cam = None
-        self.init_wrist_camera()
+        if self.wrist_cam_ip:
+            self.wrist_cam = WristCamera(self.wrist_cam_ip)
         
         self.mp_hands = mp.solutions.hands.Hands(
             static_image_mode=False,
@@ -120,20 +160,7 @@ class RobustTracker:
         self.align = rs.align(rs.stream.color)
         
         self.spat_filter = rs.spatial_filter()
-        self.spat_filter = rs.spatial_filter()
         self.temp_filter = rs.temporal_filter()
-
-    def init_wrist_camera(self):
-        if self.wrist_cam_id is not None:
-            print(f"[INFO] Opening Wrist Camera (ID: {self.wrist_cam_id})...")
-            self.wrist_cam = cv2.VideoCapture(self.wrist_cam_id)
-            if self.wrist_cam.isOpened():
-                self.wrist_cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.wrist_cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                print("[INFO] Wrist Camera Initialized.")
-            else:
-                print(f"[WARN] Failed to open Wrist Camera ID {self.wrist_cam_id}.")
-                self.wrist_cam = None
 
     def get_frames(self):
         frames = self.pipeline.wait_for_frames()
@@ -249,10 +276,9 @@ class RobustTracker:
         if img_bgr is None: return None, None
         
         wrist_img = None
-        if self.wrist_cam and self.wrist_cam.isOpened():
-             ret, w_frame = self.wrist_cam.read()
-             if ret:
-                 wrist_img = w_frame
+        wrist_img = None
+        if self.wrist_cam:
+             wrist_img = self.wrist_cam.get_frame()
 
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         h, w = img_rgb.shape[:2]
@@ -482,7 +508,9 @@ def rotationMatrixToEulerAngles(R):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wrist-cam-id", type=int, default=None, help="Device ID for Wrist Camera (e.g. 0, 2, 4)")
+    parser.add_argument("--wrist-cam-ip", type=str, default=None, help="Robot IP for Wrist Camera (e.g. 137.49.35.26)")
+    # Backwards compatibility arg just in case
+    parser.add_argument("--wrist-cam-id", type=int, default=None, help="DEPRECATED: Use --wrist-cam-ip") 
     args = parser.parse_args()
     
-    RobustTracker(wrist_cam_id=args.wrist_cam_id).run()
+    RobustTracker(wrist_cam_ip=args.wrist_cam_ip).run()
