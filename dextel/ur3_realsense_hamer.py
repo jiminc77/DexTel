@@ -354,10 +354,11 @@ class RobustTracker:
         if self.filter_pos is None: self.filter_pos = OneEuroFilter(pos_3d, t_now, min_cutoff=1.0, beta=0.02)
         pos_smooth = self.filter_pos(t_now, pos_3d)
 
-        R_pos_map = np.array([[-1, 0, 0], [0, 0, -1], [0, -1, 0]])
+        R_pos_map = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]])
+
         pos_rob = R_pos_map @ pos_smooth
         
-        R_rot_map = np.array([[-1, 0, 0], [0, 0, -1], [0, -1, 0]])
+        R_rot_map = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]])
         R_hand_local = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
         R_rob = R_rot_map @ R_smooth @ R_hand_local
         

@@ -84,7 +84,7 @@ class DexTelNode(Node):
             self.robot = SimRobotInterface(self)
         
         # [base, shoulder_lift, elbow, wrist1, wrist2, wrist3]
-        self.home_joints = np.deg2rad([0, -90, -90, -90, 90, 0])
+        self.home_joints = np.deg2rad([90, -90, -90, -90, 90, 0])
         self.robot_home_pos = None
         self.robot_home_rot = None
         
