@@ -43,7 +43,6 @@ class OneEuroFilter:
         dx_hat = self.exponential_smoothing(a_d, dx, self.dx_prev)
         
         cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
-        cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
         a = self.smoothing_factor(t_e, cutoff)
         
         x_hat = self.exponential_smoothing(a, x, self.x_prev)

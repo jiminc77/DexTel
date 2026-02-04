@@ -280,7 +280,6 @@ class RobustTracker:
         if img_bgr is None: return None, None
         
         wrist_img = None
-        wrist_img = None
         if self.wrist_cam:
              wrist_img = self.wrist_cam.get_frame()
 
