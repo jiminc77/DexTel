@@ -17,11 +17,8 @@ HAMER_CONFIDENCE_THRESH = 0.5
 PINCH_CLOSE_THRESH = 0.05
 PINCH_OPEN_THRESH = 0.10
 WRIST_FRAME_SMOOTH_ALPHA = 0.6
-
-# [New] Constants
-BOX_LOCK_THRESH = 2.0  # Pixels. If box moves less than this, lock it.
-DEPTH_SAMPLE_SIZE = 11 # 11x11 patch
-
+BOX_LOCK_THRESH = 2.0
+DEPTH_SAMPLE_SIZE = 11
 
 @dataclass
 class HandState:
@@ -100,14 +97,13 @@ class RobustTracker:
         self.filter_pos = None
         self.filter_rot = None
 
-        # [New] Stabilization & Optimization
-        self.box_filter = OneEuroFilter(np.zeros(3), 0, min_cutoff=0.01, beta=0.005) # Very slow/smooth for box
+        self.box_filter = OneEuroFilter(np.zeros(3), 0, min_cutoff=0.01, beta=0.005)
         self.z_filter = OneEuroFilter(0.5, 0, min_cutoff=0.5, beta=0.05)
         
         self.frame_count = 0
-        self.skip_rate = 2  # Run HaMeR every N frames
-        self.last_hamer_joints_local = None # Store local joints (normalized or relative)
-        self.locked_box = None # [cx, cy, s] for Deadzone Locking
+        self.skip_rate = 2
+        self.last_hamer_joints_local = None
+        self.locked_box = None
         
     def init_realsense(self):
         self.pipeline = rs.pipeline()
@@ -129,16 +125,14 @@ class RobustTracker:
         color_frame = aligned_frames.get_color_frame()
         depth_frame = aligned_frames.get_depth_frame()
         
-        if not color_frame or not depth_frame:
-            return None, None, None
+        if not color_frame or not depth_frame: return None, None, None
             
         filtered_depth = self.spat_filter.process(depth_frame)
         filtered_depth = self.temp_filter.process(filtered_depth)
         
-        img = np.asanyarray(color_frame.get_data())
-        depth = np.asanyarray(filtered_depth.get_data())
-        
-        return img, depth, filtered_depth.as_depth_frame()
+        return np.asanyarray(color_frame.get_data()), \
+               np.asanyarray(filtered_depth.get_data()), \
+               filtered_depth.as_depth_frame()
 
     def get_mediapipe_box(self, img_rgb):
         h, w = img_rgb.shape[:2]
@@ -150,11 +144,8 @@ class RobustTracker:
             return None
             
         target_idx = -1
-        
         for i, handedness in enumerate(results.multi_handedness):
-            label = handedness.classification[0].label
-            
-            if label == "Left":
+            if handedness.classification[0].label == "Left":
                 target_idx = i
                 break
                 
@@ -163,9 +154,7 @@ class RobustTracker:
             return None 
 
         lm = results.multi_hand_landmarks[target_idx]
-        
-        for pt in lm.landmark:
-            pt.x = 1.0 - pt.x
+        for pt in lm.landmark: pt.x = 1.0 - pt.x
         
         x_list = [pt.x * w for pt in lm.landmark]
         y_list = [pt.y * h for pt in lm.landmark]
@@ -185,23 +174,18 @@ class RobustTracker:
         self.prev_box = [cx, cy, box_size]
         
         s = int(box_size)
-        x = int(cx - s/2)
-        y = int(cy - s/2)
-        x = max(0, x)
-        y = max(0, y)
-        w_box = min(w - x, s)
-        h_box = min(h - y, s)
+        cx, cy = int(cx), int(cy)
+        x = max(0, cx - s//2)
+        y = max(0, cy - s//2)
+        w_box, h_box = min(w - x, s), min(h - y, s)
         
         return [x, y, w_box, h_box], lm
 
     def estimate_rigid_orientation(self, joints_3d):
         wrist = joints_3d[0]
-        index_mcp = joints_3d[5]
-        pinky_mcp = joints_3d[17]
-        
-        v1 = index_mcp - wrist
+        v1 = joints_3d[5] - wrist
         v1 /= np.linalg.norm(v1)
-        v2 = pinky_mcp - wrist
+        v2 = joints_3d[17] - wrist
         v2 /= np.linalg.norm(v2)
         
         z_vec = np.cross(v1, v2)
@@ -209,25 +193,18 @@ class RobustTracker:
         if norm_z < 1e-6: return np.eye(3)
         z_vec /= norm_z
         
-        x_vec_raw = v1 
-        y_vec = np.cross(z_vec, x_vec_raw)
+        y_vec = np.cross(z_vec, v1)
         y_vec /= np.linalg.norm(y_vec)
         x_vec = np.cross(y_vec, z_vec) 
         
-        middle_mcp = joints_3d[9]
-        v_forward = middle_mcp - wrist
-        
+        v_forward = joints_3d[9] - wrist
         proj_forward = v_forward - np.dot(v_forward, z_vec) * z_vec
         proj_forward /= (np.linalg.norm(proj_forward) + 1e-9)
         
-        final_x = proj_forward
-        final_z = z_vec
-        final_y = np.cross(final_z, final_x)
-        
-        return np.column_stack((final_x, final_y, final_z))
+        final_y = np.cross(z_vec, proj_forward)
+        return np.column_stack((proj_forward, final_y, z_vec))
 
     def get_robust_wrist_depth(self, depth_frame, x, y):
-        """ Sample 11x11 patch, remove outliers, return median. """
         h, w = depth_frame.get_height(), depth_frame.get_width()
         half = DEPTH_SAMPLE_SIZE // 2
         
@@ -237,91 +214,60 @@ class RobustTracker:
                 px, py = x + dx, y + dy
                 if 0 <= px < w and 0 <= py < h:
                     d = depth_frame.get_distance(px, py)
-                    if d > 0 and d < 2.0: # Valid range check (e.g. < 2m)
-                        valid_depths.append(d)
+                    if d > 0 and d < 2.0: valid_depths.append(d)
         
-        if not valid_depths:
-            return 0.5 # Default fallback
+        if not valid_depths: return 0.5
             
         valid_depths.sort()
         n = len(valid_depths)
-        # Interquartile Range (IQR) Filtering (25% ~ 75%)
-        q1 = valid_depths[int(n * 0.25)]
-        q3 = valid_depths[int(n * 0.75)]
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
+        q1, q3 = valid_depths[int(n * 0.25)], valid_depths[int(n * 0.75)]
+        clean_depths = [v for v in valid_depths if (q1 - 1.5*(q3-q1)) <= v <= (q3 + 1.5*(q3-q1))]
         
-        clean_depths = [v for v in valid_depths if lower <= v <= upper]
-        if not clean_depths:
-            return np.median(valid_depths)
-            
-        return np.median(clean_depths)
+        return np.median(clean_depths) if clean_depths else np.median(valid_depths)
 
     def process_frame(self) -> HandState:
         t_now = time.time()
         self.frame_count += 1
         
-        img_bgr, depth_img, depth_frame_obj = self.get_frames()
+        img_bgr, _, depth_frame_obj = self.get_frames()
         if img_bgr is None: return None
         
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         h, w = img_rgb.shape[:2]
         
-        # 1. Detection (MediaPipe)
         box_data = self.get_mediapipe_box(img_rgb)
         if not box_data: 
-            self.last_hamer_joints_local = None # Lost tracking
+            self.last_hamer_joints_local = None
             return img_bgr, None
 
         bbox_raw, mp_lm = box_data
-        
-        # 2. Input Stabilization (Box Smoothing + Locking)
-        # raw_state: [cx, cy, size]
         cx_raw = bbox_raw[0] + bbox_raw[2]/2
         cy_raw = bbox_raw[1] + bbox_raw[3]/2
         s_raw = max(bbox_raw[2], bbox_raw[3])
         
-        # Apply OneEuroFilter to Box
-        # box_smooth is [cx, cy, s]
         box_smooth = self.box_filter(t_now, np.array([cx_raw, cy_raw, s_raw]))
         
-        # Deadzone / Locking Logic
         final_box = box_smooth 
-        
         if self.locked_box is None:
             self.locked_box = box_smooth
         else:
-            # Calculate distance between current smoothed box and locked box
             dist = np.linalg.norm(box_smooth[:2] - self.locked_box[:2])
             size_diff = abs(box_smooth[2] - self.locked_box[2])
-            
-            # If movement is significant, update the lock
             if dist > BOX_LOCK_THRESH or size_diff > BOX_LOCK_THRESH:
                 self.locked_box = box_smooth
-            
-            # Use the locked box
             final_box = self.locked_box
             
-        s = int(final_box[2])
-        cx = int(final_box[0])
-        cy = int(final_box[1])
+        s, cx, cy = int(final_box[2]), int(final_box[0]), int(final_box[1])
+        x, y = max(0, cx - s//2), max(0, cy - s//2)
+        w_box, h_box = min(w - x, s), min(h - y, s)
         
-        x = max(0, cx - s//2)
-        y = max(0, cy - s//2)
-        w_box = min(w - x, s)
-        h_box = min(h - y, s)
-        
-        # 3. Hybrid Tracking (Frame Skip)
         should_run_hamer = (self.frame_count % self.skip_rate == 0) or (self.last_hamer_joints_local is None)
-        
         pred_joints_centered = None
         
         if should_run_hamer:
-            # --- Run HaMeR ---
             crop = img_rgb[y:y+h_box, x:x+w_box]
             if crop.size > 0:
-                crop_input = cv2.flip(crop, 1) # Mirror for HaMeR
+                crop_input = cv2.flip(crop, 1)
                 try:
                     _inp = cv2.resize(crop_input, (256, 256))
                     _inp = torch.from_numpy(_inp).float().to(self.device) / 255.0
@@ -332,52 +278,34 @@ class RobustTracker:
                         out = self.model({'img': _inp})
                         
                     pred_joints = out['pred_keypoints_3d'][0].cpu().numpy()
-                    pred_joints[:, 0] *= -1 # Undo mirror
+                    pred_joints[:, 0] *= -1 
                     
-                    # Localize joints relative to wrist
                     wrist_local = pred_joints[0].copy()
                     pred_joints_centered = pred_joints - wrist_local
-                    
-                    # Store for skip frames
                     self.last_hamer_joints_local = pred_joints_centered
-                    
-                except Exception as e:
-                    print(f"HaMeR Error: {e}")
-                    pass
+                except Exception: pass
         else:
-            # --- Skip Frame ---
             pred_joints_centered = self.last_hamer_joints_local
             
-        if pred_joints_centered is None:
-            return img_bgr, None
+        if pred_joints_centered is None: return img_bgr, None
 
-        # 4. Global Integration
-        # We always have fresh MediaPipe Wrist (mp_lm.landmark[0]) and Depth
         wrist_px_x = int(mp_lm.landmark[0].x * w)
         wrist_px_y = int(mp_lm.landmark[0].y * h)
         
-        # Robust Depth
         z_wrist_raw = self.get_robust_wrist_depth(depth_frame_obj, wrist_px_x, wrist_px_y)
         z_wrist_m = self.z_filter(t_now, z_wrist_raw)
         
-        # Deproject Wrist
         wrist_pt_3d = rs.rs2_deproject_pixel_to_point(self.intrinsics, [wrist_px_x, wrist_px_y], z_wrist_m)
         pos_3d = np.array(wrist_pt_3d)
         
-        # Orientation from HaMeR joints
         R = self.estimate_rigid_orientation(pred_joints_centered)
         
-        # Smooth Rotation
-        if self.filter_rot is None:
-            self.filter_rot = OneEuroFilter(R, t_now, min_cutoff=0.5, beta=0.01)
+        if self.filter_rot is None: self.filter_rot = OneEuroFilter(R, t_now, min_cutoff=0.5, beta=0.01)
         R_smooth = self.filter_rot(t_now, R)
         
-        # Smooth Position
-        if self.filter_pos is None:
-            self.filter_pos = OneEuroFilter(pos_3d, t_now, min_cutoff=1.0, beta=0.02)
+        if self.filter_pos is None: self.filter_pos = OneEuroFilter(pos_3d, t_now, min_cutoff=1.0, beta=0.02)
         pos_smooth = self.filter_pos(t_now, pos_3d)
 
-        # 5. Mapping (Camera -> Robot)
         R_pos_map = np.array([[-1, 0, 0], [0, 0, -1], [0, -1, 0]])
         pos_rob = R_pos_map @ pos_smooth
         
@@ -387,28 +315,19 @@ class RobustTracker:
         
         pos_rob += np.array([0.3, -0.1, 0.2])
         
-        # Pinch Detection
-        thumb_tip = pred_joints_centered[4]
-        index_tip = pred_joints_centered[8]
-        pinch_dist = np.linalg.norm(thumb_tip - index_tip)
-        
+        pinch_dist = np.linalg.norm(pred_joints_centered[4] - pred_joints_centered[8])
         if self.pinch_state:
             if pinch_dist > PINCH_OPEN_THRESH: self.pinch_state = False
         else:
             if pinch_dist < PINCH_CLOSE_THRESH: self.pinch_state = True
             
-        # Draw
-        if should_run_hamer:
-            color = (0, 255, 0) # Green = HaMeR Update
-        else:
-            color = (0, 255, 255) # Yellow = Interpolated/Skipped
-            
+        color = (0, 255, 0) if should_run_hamer else (0, 255, 255)
         cv2.circle(img_bgr, (wrist_px_x, wrist_px_y), 5, color, -1)
         draw_wrist_frame(img_bgr, wrist_px_x, wrist_px_y, R_smooth)
 
         rpy_raw = rotationMatrixToEulerAngles(R_smooth)
         
-        state = HandState(
+        return img_bgr, HandState(
             position=pos_rob,
             orientation=R_rob,
             pinch_dist=pinch_dist,
@@ -418,7 +337,6 @@ class RobustTracker:
             fps=0,
             rpy=rpy_raw
         )
-        return img_bgr, state
 
     def run(self):
         print("[INFO] Starting Clean Tracker...")
@@ -430,19 +348,17 @@ class RobustTracker:
                 if img is None: break
                 
                 fps = 1.0 / (time.time() - t_start)
-                if state:
-                    draw_ui_overlay(img, state, f"FPS: {fps:.1f} | Hand Tracking", (0, 255, 0))
+                if state: draw_ui_overlay(img, state, f"FPS: {fps:.1f} | Hand Tracking", (0, 255, 0))
                 
                 cv2.imshow("DexTel Control", img)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                if cv2.waitKey(1) & 0xFF == ord('q'): break
         finally:
             self.pipeline.stop()
             cv2.destroyAllWindows()
 
 def draw_wrist_frame(image, u, v, R, axis_len=60):
     origin = (u, v)
-    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)] # RGB
+    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)] 
     for i in range(3):
         vec = R[:, i]
         end_pt = (int(u + vec[0] * axis_len), int(v + vec[1] * axis_len))
@@ -520,8 +436,7 @@ def draw_ui_overlay(image, state: HandState, status_text: str, status_color: tup
 
 def rotationMatrixToEulerAngles(R):
     sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
-    singular = sy < 1e-6
-    if not singular:
+    if not sy < 1e-6:
         x = math.atan2(R[2, 1], R[2, 2])
         y = math.atan2(-R[2, 0], sy)
         z = math.atan2(R[1, 0], R[0, 0])
