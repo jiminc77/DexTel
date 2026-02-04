@@ -65,9 +65,11 @@ class DexTelNode(Node):
         
         self.declare_parameter('use_real', False)
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
+        self.declare_parameter('wrist_cam_ip', '')
         
         self.use_real = self.get_parameter('use_real').get_parameter_value().bool_value
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
+        self.wrist_cam_ip = self.get_parameter('wrist_cam_ip').get_parameter_value().string_value
         
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
         urdf_path = os.path.join(pkg_dir, param_path) if not os.path.isabs(param_path) else param_path
@@ -94,8 +96,8 @@ class DexTelNode(Node):
             self.get_logger().error(f"Retargeting Init Failed: {e}")
             self.retargeting_enabled = False
 
-        self.get_logger().info("Initializing Vision Tracker...")
-        self.tracker = RobustTracker()
+        self.get_logger().info(f"Initializing Vision Tracker (Wrist Cam IP: {self.wrist_cam_ip})...")
+        self.tracker = RobustTracker(wrist_cam_ip=self.wrist_cam_ip)
         self.q_filtered = None
         self.alpha = 0.15 
 
