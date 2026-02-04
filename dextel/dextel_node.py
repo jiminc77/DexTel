@@ -65,7 +65,7 @@ class DexTelNode(Node):
         
         self.declare_parameter('use_real', False)
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
-        self.declare_parameter('wrist_cam_ip', '')
+        self.declare_parameter('wrist_cam_ip', '137.49.35.26') # Default to known Robot IP so user doesn't have to type it every time
         
         self.use_real = self.get_parameter('use_real').get_parameter_value().bool_value
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
@@ -125,9 +125,15 @@ class DexTelNode(Node):
 
     def vision_loop(self):
         while self.running:
-            img, state = self.tracker.process_frame()
+            img, state, wrist_img = self.tracker.process_frame()
+            final_img = img
+            if wrist_img is not None and img is not None:
+                 if wrist_img.shape != img.shape:
+                     wrist_img = cv2.resize(wrist_img, (img.shape[1], img.shape[0]))
+                 final_img = np.hstack((img, wrist_img))
+
             with self.lock:
-                self.latest_img = img
+                self.latest_img = final_img
                 self.latest_state = state
             time.sleep(0.001)
 
