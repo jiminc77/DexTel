@@ -63,11 +63,14 @@ class OneEuroFilter:
         return x_hat
 
 class RobustTracker:
-    def __init__(self):
+    def __init__(self, wrist_cam_id=None):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"[INFO] Using Device: {self.device}")
         
         self.init_realsense()
+        self.wrist_cam_id = wrist_cam_id
+        self.wrist_cam = None
+        self.init_wrist_camera()
         
         self.mp_hands = mp.solutions.hands.Hands(
             static_image_mode=False,
@@ -117,7 +120,20 @@ class RobustTracker:
         self.align = rs.align(rs.stream.color)
         
         self.spat_filter = rs.spatial_filter()
+        self.spat_filter = rs.spatial_filter()
         self.temp_filter = rs.temporal_filter()
+
+    def init_wrist_camera(self):
+        if self.wrist_cam_id is not None:
+            print(f"[INFO] Opening Wrist Camera (ID: {self.wrist_cam_id})...")
+            self.wrist_cam = cv2.VideoCapture(self.wrist_cam_id)
+            if self.wrist_cam.isOpened():
+                self.wrist_cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.wrist_cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                print("[INFO] Wrist Camera Initialized.")
+            else:
+                print(f"[WARN] Failed to open Wrist Camera ID {self.wrist_cam_id}.")
+                self.wrist_cam = None
 
     def get_frames(self):
         frames = self.pipeline.wait_for_frames()
@@ -230,15 +246,21 @@ class RobustTracker:
         self.frame_count += 1
         
         img_bgr, _, depth_frame_obj = self.get_frames()
-        if img_bgr is None: return None
+        if img_bgr is None: return None, None
         
+        wrist_img = None
+        if self.wrist_cam and self.wrist_cam.isOpened():
+             ret, w_frame = self.wrist_cam.read()
+             if ret:
+                 wrist_img = w_frame
+
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         h, w = img_rgb.shape[:2]
         
         box_data = self.get_mediapipe_box(img_rgb)
         if not box_data: 
             self.last_hamer_joints_local = None
-            return img_bgr, None
+            return img_bgr, None, wrist_img
 
         bbox_raw, mp_lm = box_data
         cx_raw = bbox_raw[0] + bbox_raw[2]/2
@@ -287,7 +309,7 @@ class RobustTracker:
         else:
             pred_joints_centered = self.last_hamer_joints_local
             
-        if pred_joints_centered is None: return img_bgr, None
+        if pred_joints_centered is None: return img_bgr, None, wrist_img
 
         wrist_px_x = int(mp_lm.landmark[0].x * w)
         wrist_px_y = int(mp_lm.landmark[0].y * h)
@@ -336,7 +358,7 @@ class RobustTracker:
             joints_3d=pred_joints_centered,
             fps=0,
             rpy=rpy_raw
-        )
+        ), wrist_img
 
     def run(self):
         print("[INFO] Starting Clean Tracker...")
@@ -344,16 +366,27 @@ class RobustTracker:
         try:
             while True:
                 t_start = time.time()
-                img, state = self.process_frame()
+                img, state, wrist_img = self.process_frame()
                 if img is None: break
                 
+                # Combine images if wrist camera is active
+                final_display = img
+                if wrist_img is not None:
+                    # Resize wrist_img to match img height if needed
+                    if wrist_img.shape != img.shape:
+                        wrist_img = cv2.resize(wrist_img, (img.shape[1], img.shape[0]))
+                    final_display = np.hstack((img, wrist_img))
+
                 fps = 1.0 / (time.time() - t_start)
-                if state: draw_ui_overlay(img, state, f"FPS: {fps:.1f} | Hand Tracking", (0, 255, 0))
+                # Correct UI overlay for wider image
+                if state: 
+                    draw_ui_overlay(final_display, state, f"FPS: {fps:.1f} | Hand Tracking", (0, 255, 0))
                 
-                cv2.imshow("DexTel Control", img)
+                cv2.imshow("DexTel Control", final_display)
                 if cv2.waitKey(1) & 0xFF == ord('q'): break
         finally:
             self.pipeline.stop()
+            if self.wrist_cam: self.wrist_cam.release()
             cv2.destroyAllWindows()
 
 def draw_wrist_frame(image, u, v, R, axis_len=60):
@@ -447,4 +480,9 @@ def rotationMatrixToEulerAngles(R):
     return np.array([x, y, z])
 
 if __name__ == "__main__":
-    RobustTracker().run()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--wrist-cam-id", type=int, default=None, help="Device ID for Wrist Camera (e.g. 0, 2, 4)")
+    args = parser.parse_args()
+    
+    RobustTracker(wrist_cam_id=args.wrist_cam_id).run()
