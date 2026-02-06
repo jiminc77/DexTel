@@ -10,7 +10,6 @@ from dataclasses import dataclass
 import os
 import hamer
 from hamer.models import load_hamer, DEFAULT_CHECKPOINT
-import requests
 import threading
 
 warnings.filterwarnings("ignore")
@@ -64,57 +63,85 @@ class OneEuroFilter:
         self.t_prev = t
         return x_hat
 
-class WristCamera:
-    def __init__(self, ip):
-        self.ip = ip
-        self.url = f"http://{ip}:4242/current.jpg?type=color"
-        self.latest_frame = None
-        self.running = True
+class RealsenseCamera:
+    def __init__(self, serial_number=None, width=640, height=480, fps=30):
+        self.serial = serial_number
+        self.pipeline = rs.pipeline()
+        self.config = rs.config()
+        
+        if serial_number:
+            self.config.enable_device(serial_number)
+            
+        self.config.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
+        self.config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
+        
+        self.align = rs.align(rs.stream.color)
+        self.spat_filter = rs.spatial_filter()
+        self.temp_filter = rs.temporal_filter()
+        
+        self.profile = self.pipeline.start(self.config)
+        self.intrinsics = self.profile.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
+        
+        # Threading support
+        self.running = False
+        self.thread = None
+        self.latest_frames = (None, None, None)
         self.lock = threading.Lock()
+        
+        print(f"[INFO] RealSense Camera Started (Serial: {serial_number if serial_number else 'Default'})")
+
+    def start_async(self):
+        if self.running: return
+        self.running = True
         self.thread = threading.Thread(target=self._update_loop, daemon=True)
         self.thread.start()
-        print(f"[INFO] Wrist Camera HTTP Streamer Started ({self.url})")
+        print(f"[INFO] Camera {self.serial} started async mode.")
 
     def _update_loop(self):
         while self.running:
-            try:
-                resp = requests.get(self.url, timeout=0.5)
-                if resp.status_code == 200:
-                    arr = np.asarray(bytearray(resp.content), dtype=np.uint8)
-                    frame = cv2.imdecode(arr, -1)
-                    if frame is not None:
-                        # Resize to standard 640x480 if not already
-                        if frame.shape[:2] != (480, 640):
-                            frame = cv2.resize(frame, (640, 480))
-                        
-                        # Flip 180 degrees
-                        frame = cv2.rotate(frame, cv2.ROTATE_180)
+            frames = self.get_frames()
+            if frames[0] is not None:
+                with self.lock:
+                    self.latest_frames = frames
+            else:
+                time.sleep(0.001)
 
-                        with self.lock:
-                            self.latest_frame = frame
-                time.sleep(0.01) # Max ~100fps polling, likely bottlenecked by network/cam
-            except Exception:
-                time.sleep(0.1)
-
-    def get_frame(self):
+    def get_latest_frames(self):
         with self.lock:
-            return self.latest_frame.copy() if self.latest_frame is not None else None
+            return self.latest_frames
 
-    def release(self):
+    def get_frames(self):
+        try:
+            frames = self.pipeline.wait_for_frames(timeout_ms=2000)
+            aligned_frames = self.align.process(frames)
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
+            
+            if not color_frame or not depth_frame:
+                return None, None, None
+                
+            filtered_depth = self.spat_filter.process(depth_frame)
+            filtered_depth = self.temp_filter.process(filtered_depth)
+            
+            return np.asanyarray(color_frame.get_data()), \
+                   np.asanyarray(filtered_depth.get_data()), \
+                   filtered_depth.as_depth_frame()
+        except RuntimeError:
+            return None, None, None
+
+    def stop(self):
         self.running = False
-        self.thread.join(timeout=1.0)
+        if self.thread:
+            self.thread.join(timeout=1.0)
+        self.pipeline.stop()
 
 class RobustTracker:
-    def __init__(self, wrist_cam_ip=None):
+    def __init__(self, hand_cam_serial=None):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"[INFO] Using Device: {self.device}")
         
-        
-        self.init_realsense()
-        self.wrist_cam_ip = wrist_cam_ip
-        self.wrist_cam = None
-        if self.wrist_cam_ip:
-            self.wrist_cam = WristCamera(self.wrist_cam_ip)
+        self.hand_cam = RealsenseCamera(serial_number=hand_cam_serial)
+        self.intrinsics = self.hand_cam.intrinsics
         
         self.mp_hands = mp.solutions.hands.Hands(
             static_image_mode=False,
@@ -148,38 +175,9 @@ class RobustTracker:
         self.z_filter = OneEuroFilter(0.5, 0, min_cutoff=0.5, beta=0.05)
         
         self.frame_count = 0
-        self.skip_rate = 2
+        self.skip_rate = 3
         self.last_hamer_joints_local = None
         self.locked_box = None
-        
-    def init_realsense(self):
-        self.pipeline = rs.pipeline()
-        config = rs.config()
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        
-        profile = self.pipeline.start(config)
-        stream = profile.get_stream(rs.stream.depth)
-        self.intrinsics = stream.as_video_stream_profile().get_intrinsics()
-        self.align = rs.align(rs.stream.color)
-        
-        self.spat_filter = rs.spatial_filter()
-        self.temp_filter = rs.temporal_filter()
-
-    def get_frames(self):
-        frames = self.pipeline.wait_for_frames()
-        aligned_frames = self.align.process(frames)
-        color_frame = aligned_frames.get_color_frame()
-        depth_frame = aligned_frames.get_depth_frame()
-        
-        if not color_frame or not depth_frame: return None, None, None
-            
-        filtered_depth = self.spat_filter.process(depth_frame)
-        filtered_depth = self.temp_filter.process(filtered_depth)
-        
-        return np.asanyarray(color_frame.get_data()), \
-               np.asanyarray(filtered_depth.get_data()), \
-               filtered_depth.as_depth_frame()
 
     def get_mediapipe_box(self, img_rgb):
         h, w = img_rgb.shape[:2]
@@ -276,20 +274,16 @@ class RobustTracker:
         t_now = time.time()
         self.frame_count += 1
         
-        img_bgr, _, depth_frame_obj = self.get_frames()
+        img_bgr, _, depth_frame_obj = self.hand_cam.get_frames()
         if img_bgr is None: return None, None
         
-        wrist_img = None
-        if self.wrist_cam:
-             wrist_img = self.wrist_cam.get_frame()
-
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         h, w = img_rgb.shape[:2]
         
         box_data = self.get_mediapipe_box(img_rgb)
         if not box_data: 
             self.last_hamer_joints_local = None
-            return img_bgr, None, wrist_img
+            return img_bgr, None
 
         bbox_raw, mp_lm = box_data
         cx_raw = bbox_raw[0] + bbox_raw[2]/2
@@ -338,7 +332,7 @@ class RobustTracker:
         else:
             pred_joints_centered = self.last_hamer_joints_local
             
-        if pred_joints_centered is None: return img_bgr, None, wrist_img
+        if pred_joints_centered is None: return img_bgr, None
 
         wrist_px_x = int(mp_lm.landmark[0].x * w)
         wrist_px_y = int(mp_lm.landmark[0].y * h)
@@ -388,7 +382,7 @@ class RobustTracker:
             joints_3d=pred_joints_centered,
             fps=0,
             rpy=rpy_raw
-        ), wrist_img
+        )
 
     def run(self):
         print("[INFO] Starting Clean Tracker...")
@@ -396,27 +390,18 @@ class RobustTracker:
         try:
             while True:
                 t_start = time.time()
-                img, state, wrist_img = self.process_frame()
+                img, state = self.process_frame()
                 if img is None: break
                 
-                # Combine images if wrist camera is active
                 final_display = img
-                if wrist_img is not None:
-                    # Resize wrist_img to match img height if needed
-                    if wrist_img.shape != img.shape:
-                        wrist_img = cv2.resize(wrist_img, (img.shape[1], img.shape[0]))
-                    final_display = np.hstack((img, wrist_img))
-
                 fps = 1.0 / (time.time() - t_start)
-                # Correct UI overlay for wider image
                 if state: 
                     draw_ui_overlay(final_display, state, f"FPS: {fps:.1f} | Hand Tracking", (0, 255, 0))
                 
                 cv2.imshow("DexTel Control", final_display)
                 if cv2.waitKey(1) & 0xFF == ord('q'): break
         finally:
-            self.pipeline.stop()
-            if self.wrist_cam: self.wrist_cam.release()
+            self.hand_cam.stop()
             cv2.destroyAllWindows()
 
 def draw_wrist_frame(image, u, v, R, axis_len=60):
@@ -512,9 +497,8 @@ def rotationMatrixToEulerAngles(R):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wrist-cam-ip", type=str, default=None, help="Robot IP for Wrist Camera (e.g. 137.49.35.26)")
-    # Backwards compatibility arg just in case
-    parser.add_argument("--wrist-cam-id", type=int, default=None, help="DEPRECATED: Use --wrist-cam-ip") 
+    parser.add_argument("--wrist-cam-ip", type=str, default=None, help="Robot IP for Wrist Camera")
+    parser.add_argument("--hand-cam-serial", type=str, default=None, help="Serial Number for Hand Tracking Camera")
     args = parser.parse_args()
     
-    RobustTracker(wrist_cam_ip=args.wrist_cam_ip).run()
+    RobustTracker(wrist_cam_ip=args.wrist_cam_ip, hand_cam_serial=args.hand_cam_serial).run()

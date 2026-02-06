@@ -7,9 +7,10 @@ import os
 import threading
 from ament_index_python.packages import get_package_share_directory
 
-from dextel.ur3_realsense_hamer import RobustTracker, draw_ui_overlay
+from dextel.ur3_realsense_hamer import RobustTracker, draw_ui_overlay, RealsenseCamera
 from dextel.retargeting import RetargetingWrapper
 from dextel.robot_interface import SimRobotInterface, RealRobotInterface
+from dextel.data_recorder import DataRecorder
 
 # Constants
 STATE_HOMING = -1
@@ -57,18 +58,19 @@ class DexTelNode(Node):
     def __init__(self):
         super().__init__('dextel_node')
 
-        self.joint_filter = None 
+        # Camera Serials
+        self.HAND_CAM_SERIAL = '308222301160' # USB 3.2 (High Bandwidth for HaMeR)
+        self.GLOBAL_CAM_SERIAL = '318122303546' # USB 2.1 (Global View)
+
         self.joint_filters = None 
-        self.filter_min_cutoff = 0.1   
-        self.filter_beta = 0.05        
+        self.filter_min_cutoff = 0.05   
+        self.filter_beta = 0.005        
         
         self.declare_parameter('use_real', False)
         self.declare_parameter('urdf_path', 'assets/ur3e_hande.urdf')
-        self.declare_parameter('wrist_cam_ip', '137.49.35.26') # Default to known Robot IP so user doesn't have to type it every time
         
         self.use_real = self.get_parameter('use_real').get_parameter_value().bool_value
         param_path = self.get_parameter('urdf_path').get_parameter_value().string_value
-        self.wrist_cam_ip = self.get_parameter('wrist_cam_ip').get_parameter_value().string_value
         
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
         urdf_path = os.path.join(pkg_dir, param_path) if not os.path.isabs(param_path) else param_path
@@ -95,8 +97,24 @@ class DexTelNode(Node):
             self.get_logger().error(f"Retargeting Init Failed: {e}")
             self.retargeting_enabled = False
 
-        self.get_logger().info(f"Initializing Vision Tracker (Wrist Cam IP: {self.wrist_cam_ip})...")
-        self.tracker = RobustTracker(wrist_cam_ip=self.wrist_cam_ip)
+        self.get_logger().info(f"Initializing Vision Tracker...")
+        self.tracker = RobustTracker(hand_cam_serial=self.HAND_CAM_SERIAL)
+        
+        self.get_logger().info(f"Initializing Global Camera (Serial: {self.GLOBAL_CAM_SERIAL})...")
+        try:
+             self.global_cam = RealsenseCamera(serial_number=self.GLOBAL_CAM_SERIAL)
+             self.global_cam.start_async()
+        except Exception as e:
+             self.get_logger().error(f"Global Cam Init Failed: {e}")
+             self.global_cam = None
+
+        # Determine absolute path for data collection
+        data_dir = os.path.join(pkg_dir, "../data_collection")
+        self.recorder = DataRecorder(save_dir=data_dir)
+        
+        self.recording_state = "IDLE" # IDLE, COUNTDOWN_START, RECORDING, COUNTDOWN_STOP
+        self.recording_trigger_time = 0.0
+        
         self.q_filtered = None
         self.alpha = 0.15 
 
@@ -118,30 +136,77 @@ class DexTelNode(Node):
         self.lock = threading.Lock()
         self.latest_state = None
         self.latest_img = None
+        self.latest_global_img = None
+        self.latest_hand_img = None
+        
+        self.fps_counter = 0
+        self.last_fps_time = time.time()
+        
+        self.control_fps_counter = 0
+        self.last_control_fps_time = time.time()
+        
         self.running = True
         self.vision_thread = threading.Thread(target=self.vision_loop)
         self.vision_thread.start()
 
     def vision_loop(self):
         while self.running:
-            img, state, wrist_img = self.tracker.process_frame()
-            final_img = img
-            if wrist_img is not None and img is not None:
-                 if wrist_img.shape != img.shape:
-                     wrist_img = cv2.resize(wrist_img, (img.shape[1], img.shape[0]))
-                 final_img = np.hstack((img, wrist_img))
+            # 1. Hand Tracking only
+            img, state = self.tracker.process_frame()
+            
+            # 2. Global Cam (Async)
+            global_img = None
+            if self.global_cam:
+                # Non-blocking call now
+                g_color, _, _ = self.global_cam.get_latest_frames()
+                if g_color is not None:
+                    global_img = cv2.cvtColor(g_color, cv2.COLOR_BGR2RGB)
+            
+            # FPS Calculation
+            self.fps_counter += 1
+            now = time.time()
+            if now - self.last_fps_time >= 1.0:
+                 fps = self.fps_counter / (now - self.last_fps_time)
+                 print(f"[PERF] Vision Loop FPS: {fps:.1f}")
+                 self.fps_counter = 0
+                 self.last_fps_time = now
+            
+            display_list = []
+            
+            if img is not None:
+                display_list.append(img)
+            
+            if global_img is not None:
+                g_bgr = cv2.cvtColor(global_img, cv2.COLOR_RGB2BGR)
+                if img is not None and g_bgr.shape[:2] != img.shape[:2]:
+                     h, w = img.shape[:2]
+                     g_bgr_resized = cv2.resize(g_bgr, (w, h))
+                     display_list.append(g_bgr_resized)
+                else:
+                     display_list.append(g_bgr)
+            
+            final_img = np.hstack(display_list) if display_list else None
 
             with self.lock:
                 self.latest_img = final_img
                 self.latest_state = state
+                self.latest_global_img = global_img
+                self.latest_hand_img = img 
             time.sleep(0.001)
 
     def control_loop(self):
+        self.control_fps_counter += 1
+        now = time.time()
+        if now - self.last_control_fps_time >= 1.0:
+            fps = self.control_fps_counter / (now - self.last_control_fps_time)
+            self.control_fps_counter = 0
+            self.last_control_fps_time = now
+
         state = None
         img = None
         with self.lock:
             state = self.latest_state
-            img = self.latest_img
+            img = self.latest_img # This is now the combined image
         
         if self.robot_home_pos is None and self.retargeting_enabled:
             pos, rot = self.retargeting.compute_fk(self.home_joints)
@@ -153,14 +218,39 @@ class DexTelNode(Node):
         if key & 0xFF == ord('q'):
             self.running = False
             self.vision_thread.join()
+            if self.global_cam: self.global_cam.stop()
+            self.recorder.stop_recording()
             rclpy.shutdown()
             return
         elif key & 0xFF == ord('r'):
             self.handle_reset(state)
+        elif key & 0xFF == ord('c'):
+            self.handle_recording_toggle()
 
 
         target_joints, ui_status, ui_color = self.process_state_logic(state)
         
+        remaining = 0.0
+        if self.recording_state == "COUNTDOWN_START":
+            remaining = 3.0 - (time.time() - self.recording_trigger_time)
+            ui_status += f" | REC in {remaining:.1f}s"
+            ui_color = (255, 165, 0) # Orange
+            if remaining <= 0:
+                self.recorder.start_recording()
+                self.recording_state = "RECORDING"
+        
+        elif self.recording_state == "COUNTDOWN_STOP":
+            remaining = 3.0 - (time.time() - self.recording_trigger_time)
+            ui_status += f" | STOP in {remaining:.1f}s"
+            ui_color = (255, 165, 0) # Orange
+            pass
+            if remaining <= 0:
+                self.recorder.stop_recording()
+                self.recording_state = "IDLE"
+
+        elif self.recording_state == "RECORDING":
+            ui_status += " | REC"
+            ui_color = (0, 0, 255) # Red
 
         gripper_val = self.get_gripper_val(state)
         
@@ -181,14 +271,58 @@ class DexTelNode(Node):
                 else:
                     self.robot.move_joints(target_joints, max_vel=max_vel)
                     self.robot.move_gripper(gripper_val)
+                    
+            # --- DATA RECORDING ---
+            is_recording_active = (self.recorder.recording) or (self.recording_state == "COUNTDOWN_STOP")
+            
+            if is_recording_active and target_joints is not None:
+                curr_q = self.home_joints
+                curr_vel = np.zeros(6)
+                
+                if isinstance(self.robot, RealRobotInterface):
+                     real_q = self.robot.get_current_joints()
+                     if real_q is not None: curr_q = np.array(real_q)
+                
+                record_images = {}
+                with self.lock:
+                     # Only record High cam now
+                     if self.latest_global_img is not None:
+                         record_images['cam_high'] = self.latest_global_img
+                         
+                action = np.append(target_joints, gripper_val) 
+                
+                # Append gripper command as proxy/feedback for qpos
+                curr_q_ext = np.append(curr_q, gripper_val) 
+                curr_vel_ext = np.append(curr_vel, 0.0)
+                
+                self.recorder.add_frame(curr_q_ext, curr_vel_ext, action, record_images)
+
 
         if img is not None:
             display_img = img.copy()
             if state:
                 try:
-                    draw_ui_overlay(display_img, state, ui_status, ui_color)
+                    status_text = ui_status
+                    # Color handled by state machine above
+                    draw_ui_overlay(display_img, state, status_text, ui_color)
                 except Exception: pass
             cv2.imshow("DexTel Control", display_img)
+
+    def handle_recording_toggle(self):
+        if self.recording_state == "IDLE":
+            self.recording_state = "COUNTDOWN_START"
+            self.recording_trigger_time = time.time()
+            self.get_logger().info("Recording Countdown Started (3s)...")
+        elif self.recording_state == "RECORDING":
+            self.recording_state = "COUNTDOWN_STOP"
+            self.recording_trigger_time = time.time()
+            self.get_logger().info("Stopping Countdown Started (3s)...")
+        elif self.recording_state == "COUNTDOWN_START":
+             self.recording_state = "IDLE" # Cancel start
+             self.get_logger().info("Recording Trigger CANCELLED.")
+        elif self.recording_state == "COUNTDOWN_STOP":
+             self.recording_state = "RECORDING" # Cancel stop
+             self.get_logger().info("Stop Trigger CANCELLED.")
 
     def handle_reset(self, state):
         if state is not None:
