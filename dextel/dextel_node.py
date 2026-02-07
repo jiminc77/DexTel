@@ -411,7 +411,7 @@ class DexTelNode(Node):
                 self.get_logger().info("Calibration Done.")
             else:
                 self.state = STATE_WAITING
-                self.get_logger().warn("Calibration Failed.")
+            self.get_logger().warn("Calibration Failed.")
         
         return target_q, status, color
 
