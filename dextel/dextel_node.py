@@ -423,6 +423,12 @@ class DexTelNode(Node):
         if state:
             self.last_hand_seen_time = time.time()
             diff_pos = state.position - self.origin_hand_pos     
+            
+            # --- XY 180 Degree Flip ---
+            # If robot moves opposite to hand, use this flip.
+            diff_pos[0] *= -1.0 # Invert Forward/Backward (X)
+            diff_pos[1] *= -1.0 # Invert Left/Right (Y)
+            
             target_pos = self.robot_home_pos + (diff_pos * self.movement_scale)
             
             R_delta = state.orientation @ self.origin_hand_rot.T
